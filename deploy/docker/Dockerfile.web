@@ -5,6 +5,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+# A copied/archive-based Windows checkout may bypass .gitattributes. Normalize
+# the build helpers inside the image as a defensive fallback.
+RUN sed -i 's/\r$//' scripts/*.sh
 ARG NEXT_PUBLIC_API_BASE_URL=/api/v1
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 RUN npm run build
