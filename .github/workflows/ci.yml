@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build and test web
+        run: npm test
+
+      - name: Install and test Core API
+        run: |
+          npm --prefix services/api ci
+          npm --prefix services/api test
+
+      - name: Test Judge queue and quest data
+        run: npm --prefix judge test
+
+      - name: Validate Compose model
+        run: docker compose --env-file .env.windows.example --profile all config --quiet
+
+      - name: Build and test isolated Judge runner
+        run: |
+          docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
+          JUDGE_DOCKER_TEST=1 npm --prefix judge test

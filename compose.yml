@@ -1,0 +1,142 @@
+name: algoquest
+
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    profiles: ["web", "all"]
+    environment:
+      API_UPSTREAM: "${API_UPSTREAM:-http://api:8787}"
+      WEB_UPSTREAM: "${WEB_UPSTREAM:-http://web:3000}"
+      NGINX_ENVSUBST_FILTER: "^(API_UPSTREAM|WEB_UPSTREAM)$"
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:size=4m
+      - /var/cache/nginx:size=32m
+      - /var/run:size=4m
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-/api/v1}"
+    profiles: ["web", "all"]
+    expose:
+      - "3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./services/api
+    profiles: ["api", "all"]
+    environment:
+      PORT: "8787"
+      DATABASE_URL: "${DATABASE_URL:-postgres://algoquest:algoquest@db:5432/algoquest}"
+      DATABASE_POOL_SIZE: "${DATABASE_POOL_SIZE:-10}"
+      JUDGE_API_URL: "${JUDGE_API_URL:-http://judge:8788}"
+      JUDGE_API_TOKEN: "${JUDGE_API_TOKEN}"
+      API_ALLOWED_ORIGIN: "${API_ALLOWED_ORIGIN:-*}"
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8787}:8787"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then(r=>{if(![200,503].includes(r.status))process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  judge:
+    build:
+      context: ./judge
+      dockerfile: Dockerfile.service
+    profiles: ["judge", "all"]
+    environment:
+      PORT: "8788"
+      JUDGE_RUNNER_IMAGE: "${JUDGE_RUNNER_IMAGE:-algoquest-runner:cpp14}"
+      JUDGE_MAX_PARALLEL: "${JUDGE_MAX_PARALLEL:-2}"
+      JUDGE_QUEUE_CAPACITY: "${JUDGE_QUEUE_CAPACITY:-1000}"
+      JUDGE_COOLDOWN_MS: "${JUDGE_COOLDOWN_MS:-4000}"
+      JUDGE_RESULT_TTL_MS: "${JUDGE_RESULT_TTL_MS:-600000}"
+      JUDGE_COMPILE_CACHE_ENTRIES: "${JUDGE_COMPILE_CACHE_ENTRIES:-256}"
+      JUDGE_WORK_ROOT: "/var/lib/algoquest/judge-work"
+      JUDGE_CACHE_ROOT: "/var/lib/algoquest/judge-cache"
+      JUDGE_WORK_VOLUME: "${JUDGE_WORK_VOLUME:-algoquest-judge-work}"
+      JUDGE_TRUST_PROXY: "true"
+      JUDGE_ALLOWED_ORIGIN: "${JUDGE_ALLOWED_ORIGIN:-http://api:8787}"
+      JUDGE_API_TOKEN: "${JUDGE_API_TOKEN}"
+    ports:
+      - "${JUDGE_BIND_ADDRESS:-127.0.0.1}:${JUDGE_PORT:-8788}:8788"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - judge-work:/var/lib/algoquest/judge-work
+      - judge-cache:/var/lib/algoquest/judge-cache
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8788/health').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    profiles: ["database", "all"]
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-algoquest}"
+      POSTGRES_USER: "${POSTGRES_USER:-algoquest}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    ports:
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-algoquest} -d ${POSTGRES_DB:-algoquest}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+    name: "${POSTGRES_VOLUME:-algoquest-postgres-data}"
+  judge-work:
+    name: "${JUDGE_WORK_VOLUME:-algoquest-judge-work}"
+  judge-cache:
+    name: "${JUDGE_CACHE_VOLUME:-algoquest-judge-cache}"

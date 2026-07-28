@@ -1,0 +1,13 @@
+FROM gcc:14-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 time \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
+COPY runner/submission_runner.py /opt/algoquest/submission_runner.py
+RUN chmod 0555 /opt/algoquest/submission_runner.py
+
+WORKDIR /workspace
+
+LABEL org.opencontainers.image.title="AlgoQuest C++14 runner"
