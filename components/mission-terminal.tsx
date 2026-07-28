@@ -25,6 +25,7 @@ type CaseResult = {
 type JudgeResponse = {
   verdict: Verdict;
   compilerOutput?: string;
+  error?: string;
   cases: Array<{
     id: string;
     verdict: Verdict;
@@ -152,6 +153,7 @@ async function requestJudge(
   return {
     verdict: submission.verdict,
     compilerOutput: submission.compilerOutput,
+    error: submission.error,
     cases: submission.cases,
   };
 }
@@ -181,6 +183,9 @@ export function MissionTerminal({
   const formatFailure = (response: JudgeResponse) => {
     if (response.verdict === "CE") {
       return `$ compile --std=gnu++14\n[ COMPILE ERROR ]\n${response.compilerOutput ?? "Compiler produced no diagnostics."}`;
+    }
+    if (response.verdict === "JE") {
+      return `$ verdict\n[ JUDGE ERROR ]\n${response.error ?? "The runner exited without diagnostics."}\n> Check the Judge service logs and rerun the deployment smoke test.`;
     }
     const failed = response.cases.find((item) => item.verdict !== "AC");
     if (!failed) return `$ verdict\n[ ${response.verdict} ]`;
