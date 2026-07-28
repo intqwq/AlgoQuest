@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { AccountPanel } from "@/components/account-panel";
 import { MissionTerminal } from "@/components/mission-terminal";
-import { loadQuestProgress, saveQuestProgress } from "@/lib/api-client";
+import {
+  loadCurrentPlayer,
+  loadQuestProgress,
+  Player,
+  saveQuestProgress,
+} from "@/lib/api-client";
 import { isQuestUnlocked, Quest, QuestStatus, quests } from "@/lib/quests";
 
 const logo = String.raw`
@@ -100,13 +106,12 @@ export default function Home() {
   const [notice, setNotice] = useState("SYSTEM READY // SELECT A QUEST");
   const [screen, setScreen] = useState<"world" | "mission">("world");
   const [cleared, setCleared] = useState<Set<string>>(new Set());
+  const [player, setPlayer] = useState<Player>();
 
-  useEffect(() => {
-    // Browser persistence is intentionally synchronized after hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCleared(loadLocalProgress());
-    void loadQuestProgress()
-      .then((progress) => {
+  const refreshAccountProgress = useCallback(() => {
+    void Promise.all([loadQuestProgress(), loadCurrentPlayer()])
+      .then(([progress, currentPlayer]) => {
+        setPlayer(currentPlayer);
         setCleared((current) => {
           const merged = new Set(current);
           progress
@@ -120,8 +125,15 @@ export default function Home() {
         });
       })
       .catch(() => {
-        // Local progress remains usable while the API service is offline.
+        // Local progress remains usable while the account service is offline.
       });
+  }, []);
+
+  useEffect(() => {
+    // Browser persistence is intentionally synchronized after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCleared(loadLocalProgress());
+    refreshAccountProgress();
 
     const syncScreenFromHash = () => {
       const missionId = window.location.hash.match(/^#mission\/([a-z0-9-]+)$/)?.[1];
@@ -139,7 +151,7 @@ export default function Home() {
     syncScreenFromHash();
     window.addEventListener("hashchange", syncScreenFromHash);
     return () => window.removeEventListener("hashchange", syncScreenFromHash);
-  }, []);
+  }, [refreshAccountProgress]);
 
   const completeQuest = (questId: string, score: number) => {
     setCleared((current) => {
@@ -215,10 +227,12 @@ export default function Home() {
           <a href="#missions">[ MISSIONS ]</a>
           <a href="#codex">[ CODEX ]</a>
         </nav>
-        <div className="player-chip">
-          <span className="online-dot" />
-          INLINEINT // LV.{String(cleared.size + 1).padStart(2, "0")}
-        </div>
+        <AccountPanel
+          player={player}
+          level={cleared.size + 1}
+          onPlayerChange={setPlayer}
+          onAccountSync={refreshAccountProgress}
+        />
       </header>
 
       <div className="status-line">

@@ -107,6 +107,10 @@ try {
             & docker compose --env-file $EnvFile logs --tail 100 api judge
             throw "Core API smoke test failed. Submission polling or progress persistence is unavailable."
         }
+        if ((Get-Content $EnvFile -Raw).Contains("AUTH_EMAIL_MODE=log")) {
+            Write-Host "Account email is in local log mode."
+            Write-Host "Use 'docker compose --env-file .env.windows logs -f api' to open verification links."
+        }
     }
 
     & docker compose --env-file $EnvFile ps

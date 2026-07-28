@@ -18,13 +18,23 @@ the distro `docker-compose-v2` package with Docker's
 git clone https://github.com/intqwq/AlgoQuest.git
 cd AlgoQuest
 chmod +x deploy/pi/*.sh
+cp .env.pi.example .env.pi
+```
+
+Before the first deployment, configure the Resend API key and Cloudflare
+Turnstile site/secret keys in `.env.pi`. The production script intentionally
+refuses placeholder account credentials. Follow
+[Player account security](ACCOUNT_SECURITY.md), then run:
+
+```bash
+chmod 600 .env.pi
 ./deploy/pi/deploy.sh
 ```
 
-The script creates `.env.pi` with mode `0600`, builds the ARM64 C++ runner, and
-starts every service. Before reporting success, it verifies both the isolated
-runner and the complete Core API submission/poll/progress path. Open the Pi's
-LAN address in a browser.
+The script fills the database and Judge secrets, builds the ARM64 C++ runner,
+and starts every service. Before reporting success, it verifies both the
+isolated runner and the complete Core API submission/poll/progress path. Open
+the Pi's LAN address in a browser.
 
 ```bash
 ./deploy/pi/status.sh
@@ -54,6 +64,13 @@ http://127.0.0.1:80
 Set `API_ALLOWED_ORIGIN=https://game.intqwq.com` in `.env.pi`. TLS should
 terminate at the tunnel provider. Do not create public tunnel routes for ports
 `5432`, `8787`, `8788`, or the Docker socket.
+
+Also keep these origin-bound values aligned:
+
+```dotenv
+PUBLIC_APP_URL=https://game.intqwq.com
+TURNSTILE_EXPECTED_HOSTNAME=game.intqwq.com
+```
 
 ## Split the Pi and Windows roles
 

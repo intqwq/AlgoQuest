@@ -42,13 +42,24 @@ if [[ ! -f "${env_file}" ]]; then
   echo "Created .env.pi."
 fi
 
-if grep -q "CHANGE_ME_" "${env_file}"; then
+if grep -q "CHANGE_ME_DATABASE_PASSWORD" "${env_file}" ||
+  grep -q "CHANGE_ME_JUDGE_TOKEN" "${env_file}"; then
   database_password="$(openssl rand -hex 24)"
   judge_token="$(openssl rand -hex 32)"
   sed -i "s/CHANGE_ME_DATABASE_PASSWORD/${database_password}/g" "${env_file}"
   sed -i "s/CHANGE_ME_JUDGE_TOKEN/${judge_token}/g" "${env_file}"
   chmod 600 "${env_file}"
   echo "Filled .env.pi with generated local secrets."
+fi
+
+if [[ "${mode}" == "all" || "${mode}" == "api" ]]; then
+  if grep -Eq '^RESEND_API_KEY=(|CHANGE_ME_)' "${env_file}" ||
+    grep -Eq '^TURNSTILE_SITE_KEY=(|CHANGE_ME_)' "${env_file}" ||
+    grep -Eq '^TURNSTILE_SECRET_KEY=(|CHANGE_ME_)' "${env_file}"; then
+    echo "Account security is not configured in .env.pi." >&2
+    echo "Add the Resend API key and the game.intqwq.com Turnstile site/secret keys." >&2
+    exit 78
+  fi
 fi
 
 cd "${project_root}"

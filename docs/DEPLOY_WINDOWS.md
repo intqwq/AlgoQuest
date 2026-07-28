@@ -32,6 +32,16 @@ The command:
 
 Open <http://localhost:8080>.
 
+Windows defaults to Cloudflare's official Turnstile test keys and local email
+log mode. Register a player, then copy the verification URL from:
+
+```powershell
+docker compose --env-file .env.windows logs -f api
+```
+
+No Resend account is required for this local flow. See
+[Player account security](ACCOUNT_SECURITY.md) to test real email.
+
 ## Verify
 
 ```powershell
@@ -70,6 +80,9 @@ For a split deployment, edit `.env.windows` before starting:
 - `DATABASE_URL` is the database used by the Core API.
 - `JUDGE_API_URL` is the Judge address used by the Core API.
 - `JUDGE_API_TOKEN` must match the Judge host.
+- `PUBLIC_APP_URL` is the origin placed in verification/reset links.
+- `AUTH_EMAIL_MODE=resend` and `RESEND_API_KEY` enable real mail.
+- `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` replace local test keys.
 - Change the relevant `*_BIND_ADDRESS` to `0.0.0.0` only when another machine
   must connect, then restrict that port in Windows Firewall.
 
@@ -106,3 +119,7 @@ algoquest-judge-cache
 - API health is degraded: inspect `api` logs, then `db` and `judge` health.
 - Web loads but submissions are offline: confirm `/api/v1/sessions` reaches the
   API and that API/Judge `JUDGE_API_TOKEN` values match.
+- Registration succeeds but no message arrives in local mode: the link is in
+  the API container log; local mode deliberately does not send mail.
+- Turnstile stays blank: allow `https://challenges.cloudflare.com` in the
+  browser/network and confirm the public site key.

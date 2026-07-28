@@ -3,12 +3,14 @@
 ## Runtime boundary
 
 ```mermaid
-flowchart LR
+flowchart TD
     B["Browser"] -->|HTTPS| G["Gateway + Web"]
-    G -->|/api/v1| A["Core API"]
-    A -->|PostgreSQL protocol| D[("PostgreSQL")]
-    A -->|REST + shared token| J["Judge API"]
+    G -->|"/api/v1"| A["Core API"]
+    A -->|SQL| D[("PostgreSQL")]
+    A -->|Private REST| J["Judge API"]
     J -->|Docker socket| R["Disposable runner"]
+    A -->|Token validation| T["Cloudflare Turnstile"]
+    A -->|Verification mail| E["Resend"]
 ```
 
 The public boundary ends at the Gateway. Only the Core API owns user data, and
@@ -27,6 +29,12 @@ only the Judge owns access to the Docker socket.
 ### Core API
 
 - Creates opaque 90-day anonymous sessions.
+- Upgrades guests into email/password accounts without losing progress.
+- Merges guest data when a player logs in to an existing account.
+- Sends verification and password-reset mail through Resend.
+- Validates Turnstile tokens, action, and hostname on the server.
+- Applies persistent per-IP and per-email authentication limits.
+- Hashes passwords with salted `scrypt`.
 - Stores only SHA-256 hashes of session tokens.
 - Loads and saves quest progress.
 - Proxies submission creation and polling to the Judge.
@@ -47,14 +55,16 @@ only the Judge owns access to the Docker socket.
 
 ### PostgreSQL
 
-The initial migration creates:
+The migrations create:
 
 | Table | Purpose |
 |---|---|
-| `users` | Anonymous or future authenticated player identity |
+| `users` | Guest and authenticated player identities |
 | `sessions` | Hashed bearer tokens and expiry |
 | `quest_progress` | Clear state and best score |
 | `submissions` | User-owned Judge job and verdict history |
+| `account_tokens` | Hashed, expiring email verification and reset tokens |
+| `auth_rate_limits` | Persistent abuse counters by hashed IP/email key |
 
 PostgreSQL is not an HTTP service. The phrase “database service” means an
 independently deployable database with the Core API as its only application
@@ -66,6 +76,15 @@ client.
 |---|---|---|
 | `GET /health` | None | API, database, and Judge readiness |
 | `POST /v1/sessions` | None | Create a player and return an opaque token |
+| `GET /v1/auth/config` | None | Return the public Turnstile site key |
+| `POST /v1/auth/register` | Guest optional + Turnstile | Upgrade/create an account and send verification |
+| `POST /v1/auth/verify-email` | Email token | Verify email and create a session |
+| `POST /v1/auth/login` | Guest optional + Turnstile | Login and merge guest progress |
+| `POST /v1/auth/logout` | Player bearer token | Revoke the current session |
+| `POST /v1/auth/forgot-password` | Turnstile | Send a generic reset response |
+| `POST /v1/auth/reset-password` | Reset token + Turnstile | Replace password and revoke old sessions |
+| `GET /v1/me` | Player bearer token | Load the current player record |
+| `PUT /v1/me/profile` | Player bearer token | Update the display name |
 | `GET /v1/me/progress` | Player bearer token | Load saved progress |
 | `PUT /v1/me/progress/:questId` | Player bearer token | Sync progress backed by an accepted submission |
 | `POST /v1/judge/submissions` | Player bearer token | Queue a Judge job |
@@ -116,6 +135,9 @@ Judge host:
 `JUDGE_API_TOKEN` must match on API and Judge. If PostgreSQL crosses machines,
 use TLS and a dedicated database user. Prefer a LAN or VPN/Tailnet and firewall
 the API, Judge, and database ports to exact peer addresses.
+
+Resend and Turnstile are outbound HTTPS dependencies of the Core API. Their
+secret credentials never enter the Web image or browser bundle.
 
 ## Scaling path
 

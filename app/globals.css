@@ -123,11 +123,18 @@ a {
 
 .player-chip {
   justify-self: end;
+  border: 1px solid var(--ink);
   font-size: 11px;
   font-weight: 700;
   padding: 8px 11px;
-  border: 1px solid var(--ink);
   background: var(--paper-deep);
+  cursor: pointer;
+  text-align: left;
+}
+
+.player-chip:hover {
+  color: var(--paper);
+  background: var(--ink);
 }
 
 .online-dot {
@@ -673,6 +680,177 @@ footer {
 
 footer a {
   color: var(--green);
+}
+
+.account-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(21, 21, 21, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.account-panel {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 10px 10px 0 var(--green-dark);
+}
+
+.account-panel__bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 13px;
+  color: var(--green);
+  background: var(--ink);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.account-panel__bar button,
+.account-switches button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.account-panel__bar button:hover,
+.account-switches button:hover {
+  color: var(--green);
+}
+
+.account-panel__body {
+  padding: 30px;
+}
+
+.account-panel h2 {
+  margin: 0 0 24px;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: clamp(34px, 6vw, 54px);
+  letter-spacing: -0.06em;
+}
+
+.account-panel form {
+  display: grid;
+  gap: 16px;
+}
+
+.account-panel label {
+  display: grid;
+  gap: 7px;
+  color: var(--green-dark);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.account-panel input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  outline: 0;
+  color: var(--ink);
+  background: #faf8f2;
+  font: 13px "Cascadia Mono", Consolas, monospace;
+}
+
+.account-panel input:focus {
+  box-shadow: 4px 4px 0 var(--green);
+}
+
+.account-panel input:read-only {
+  color: #686761;
+  background: var(--paper-deep);
+}
+
+.turnstile-frame {
+  min-height: 70px;
+  padding: 7px;
+  overflow: hidden;
+  border: 1px dashed #918f87;
+  background: #faf8f2;
+}
+
+.account-submit {
+  min-height: 46px;
+  border: 2px solid var(--ink);
+  color: var(--paper);
+  background: var(--ink);
+  box-shadow: 5px 5px 0 var(--green);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.account-submit:disabled {
+  color: #77756f;
+  background: #cbc6bb;
+  border-color: #77756f;
+  box-shadow: 3px 3px 0 #99968e;
+  cursor: not-allowed;
+}
+
+.account-message,
+.account-dev-note {
+  padding: 11px;
+  border-left: 4px solid var(--green-dark);
+  background: #dce8de;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.account-dev-note {
+  border-color: var(--amber);
+  background: #f4e7c9;
+}
+
+.account-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px dashed #99968e;
+  color: var(--green-dark);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.account-record {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--ink);
+}
+
+.account-record span,
+.account-record code {
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px dashed #aaa79f;
+  font-size: 9px;
+}
+
+.account-record span {
+  color: var(--green-dark);
+  background: var(--paper-deep);
+  font-weight: 900;
+}
+
+.account-record code {
+  overflow-wrap: anywhere;
 }
 
 .mission-terminal {

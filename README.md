@@ -3,7 +3,9 @@
 AlgoQuest is an ASCII-art competitive-programming adventure. The current
 vertical slice contains a playable world map, three unlockable C++14 missions
 (I/O, conditionals, and loops), an asynchronous Docker-isolated judge, and
-persistent player progress.
+persistent player accounts and progress. Accounts include email verification
+and password recovery through Resend, with Cloudflare Turnstile guarding public
+authentication endpoints.
 
 The hosted preview is available at
 [algoquest.intqwq.chatgpt.site](https://algoquest.intqwq.chatgpt.site). The
@@ -17,7 +19,7 @@ The self-hosted runtime is split into independently deployable services:
 | Service | Default port | Responsibility |
 |---|---:|---|
 | Gateway + Web | `8080` on Windows, `80` on Pi | UI, same-origin `/api` proxy |
-| Core API | `8787` | Sessions, progress, submission history, Judge orchestration |
+| Core API | `8787` | Accounts, sessions, progress, email, security, Judge orchestration |
 | Judge | `8788` | Queue, GNU C++14 compilation, isolated execution |
 | PostgreSQL | `5432` | Users, sessions, progress, submissions |
 
@@ -65,6 +67,7 @@ sudo ./deploy/pi/install-systemd.sh
 ```
 
 Full instructions: [Raspberry Pi deployment](docs/DEPLOY_RASPBERRY_PI.md).
+Production account setup: [Resend and Turnstile](docs/ACCOUNT_SECURITY.md).
 
 ## Split-host deployment
 
@@ -94,6 +97,7 @@ For cross-machine deployment, change only the URLs in `.env.windows` or
 - Web host: `API_UPSTREAM`
 - API host: `DATABASE_URL` and `JUDGE_API_URL`
 - API and Judge: the same `JUDGE_API_TOKEN`
+- Account/API host: `PUBLIC_APP_URL`, Resend, and Turnstile credentials
 
 Do not expose PostgreSQL or the Judge directly to the public internet. Use a
 private LAN, Tailnet/VPN, or TLS-authenticated tunnel between machines.
