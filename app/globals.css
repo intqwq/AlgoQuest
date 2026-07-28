@@ -1483,12 +1483,11 @@ footer a {
   }
 
   .player-chip {
-    font-size: 0;
-  }
-
-  .player-chip::after {
-    content: "LV.01";
-    font-size: 10px;
+    max-width: 52vw;
+    overflow: hidden;
+    font-size: 8px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .status-line span:first-child,
