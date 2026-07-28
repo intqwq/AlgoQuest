@@ -65,6 +65,17 @@ docker compose \
   --profile "${mode}" \
   up -d --build --remove-orphans
 
+if [[ "${mode}" == "all" || "${mode}" == "judge" ]]; then
+  echo "Running the isolated Judge smoke test..."
+  if ! docker compose \
+    --env-file "${env_file}" \
+    exec -T judge node scripts/smoke.mjs; then
+    docker compose --env-file "${env_file}" logs --tail 100 judge
+    echo "Judge smoke test failed. Correct C++ was not accepted." >&2
+    exit 1
+  fi
+fi
+
 docker compose --env-file "${env_file}" ps
 
 if [[ "${mode}" == "all" || "${mode}" == "web" ]]; then
