@@ -22,7 +22,9 @@ chmod +x deploy/pi/*.sh
 ```
 
 The script creates `.env.pi` with mode `0600`, builds the ARM64 C++ runner, and
-starts every service. Open the Pi's LAN address in a browser.
+starts every service. Before reporting success, it verifies both the isolated
+runner and the complete Core API submission/poll/progress path. Open the Pi's
+LAN address in a browser.
 
 ```bash
 ./deploy/pi/status.sh

@@ -1,6 +1,11 @@
 import http from "node:http";
 import { bearerToken, cleanDisplayName } from "./auth.mjs";
 import { createDatabase, migrateWithRetry } from "./database.mjs";
+import {
+  cachedTerminalSubmission,
+  upstreamFailure,
+} from "./judge-status.mjs";
+import { missingPrerequisites } from "./quests.mjs";
 
 const port = Number(process.env.PORT ?? 8787);
 const databaseUrl =
@@ -61,10 +66,19 @@ function judgeHeaders(userId, contentType) {
 }
 
 async function judgeRequest(path, init = {}) {
+  const { timeoutMs = 10_000, ...requestInit } = init;
   return fetch(`${judgeBaseUrl}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(init.timeoutMs ?? 10_000),
+    ...requestInit,
+    signal: AbortSignal.timeout(timeoutMs),
   });
+}
+
+async function readUpstreamJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return { error: "INVALID_UPSTREAM_RESPONSE" };
+  }
 }
 
 async function health() {
@@ -125,6 +139,14 @@ const server = http.createServer(async (request, response) => {
       const body = await readJson(request, 4 * 1024);
       const status = body.status === "cleared" ? "cleared" : "started";
       const score = Math.max(0, Math.min(100, Number(body.score ?? 0)));
+      if (
+        status === "cleared" &&
+        !(await database.hasAcceptedSubmission(player.id, progressMatch[1]))
+      ) {
+        return json(response, 409, {
+          error: "PROGRESS_REQUIRES_ACCEPTED_SUBMISSION",
+        });
+      }
       await database.saveProgress(
         player.id,
         progressMatch[1],
@@ -139,12 +161,25 @@ const server = http.createServer(async (request, response) => {
       url.pathname === "/v1/judge/submissions"
     ) {
       const body = await readJson(request);
+      const missing = missingPrerequisites(
+        body.questId,
+        await database.listProgress(player.id),
+      );
+      if (missing === undefined) {
+        return json(response, 404, { error: "UNKNOWN_QUEST" });
+      }
+      if (missing.length) {
+        return json(response, 403, {
+          error: "QUEST_LOCKED",
+          missingPrerequisites: missing,
+        });
+      }
       const upstream = await judgeRequest("/v1/submissions", {
         method: "POST",
         headers: judgeHeaders(player.id, "application/json"),
         body: JSON.stringify(body),
       });
-      const result = await upstream.json();
+      const result = await readUpstreamJson(upstream);
       if (upstream.ok && result.submission?.id) {
         await database.createSubmission(
           player.id,
@@ -169,31 +204,59 @@ const server = http.createServer(async (request, response) => {
       );
       if (!record) return json(response, 404, { error: "UNKNOWN_SUBMISSION" });
 
-      const upstream = await judgeRequest(
-        `/v1/submissions/${submissionMatch[1]}`,
-        { headers: judgeHeaders(player.id) },
-      );
-      const result = await upstream.json();
-      if (upstream.ok && result.submission) {
-        await database.updateSubmission(record.id, result.submission);
+      let upstream;
+      try {
+        upstream = await judgeRequest(
+          `/v1/submissions/${submissionMatch[1]}`,
+          { headers: judgeHeaders(player.id), timeoutMs: 3_000 },
+        );
+      } catch (error) {
+        const cached = cachedTerminalSubmission(record);
+        if (cached) return json(response, 200, { submission: cached });
+        console.error("Judge status request failed:", error.message);
+        return json(response, 503, {
+          error: "JUDGE_STATUS_UNAVAILABLE",
+          retryAfterMs: 1000,
+        });
+      }
+
+      const result = await readUpstreamJson(upstream);
+      if (!upstream.ok) {
+        const cached = cachedTerminalSubmission(record);
+        if (cached) return json(response, 200, { submission: cached });
+        const failure = upstreamFailure(upstream.status, result);
+        return json(response, failure.status, failure.body);
+      }
+
+      if (result.submission) {
+        try {
+          await database.updateSubmission(record.id, result.submission);
+        } catch (error) {
+          console.error("Submission persistence failed:", error.message);
+        }
         if (
           result.submission.status === "DONE" &&
           result.submission.verdict === "AC"
         ) {
-          await database.saveProgress(
-            player.id,
-            record.questId,
-            "cleared",
-            100,
-          );
+          try {
+            await database.saveProgress(
+              player.id,
+              record.questId,
+              "cleared",
+              100,
+            );
+          } catch (error) {
+            console.error("Accepted progress persistence failed:", error.message);
+          }
         }
       }
-      return json(response, upstream.status, result);
+      return json(response, 200, result);
     }
 
     return json(response, 404, { error: "NOT_FOUND" });
   } catch (error) {
     const payloadTooLarge = error.message === "PAYLOAD_TOO_LARGE";
+    console.error("Core API request failed:", error.message);
     return json(response, payloadTooLarge ? 413 : 502, {
       error: payloadTooLarge ? "PAYLOAD_TOO_LARGE" : "UPSTREAM_FAILURE",
     });

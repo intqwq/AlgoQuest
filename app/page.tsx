@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { MissionTerminal } from "@/components/mission-terminal";
 import { loadQuestProgress, saveQuestProgress } from "@/lib/api-client";
-import { Quest, quests } from "@/lib/quests";
+import { isQuestUnlocked, Quest, QuestStatus, quests } from "@/lib/quests";
 
 const logo = String.raw`
     _    _              ___                  _
@@ -27,6 +27,7 @@ function QuestNode({
   selected,
   completed,
   playable,
+  displayStatus,
   onSelect,
   onOpen,
 }: {
@@ -34,13 +35,14 @@ function QuestNode({
   selected: boolean;
   completed: boolean;
   playable: boolean;
+  displayStatus: QuestStatus;
   onSelect: () => void;
   onOpen: () => void;
 }) {
-  const disabled = quest.status === "locked";
+  const disabled = displayStatus === "secret";
   return (
     <button
-      className={`quest-node quest-node--${quest.status} ${
+      className={`quest-node quest-node--${displayStatus} ${
         selected ? "is-selected" : ""
       } ${completed ? "is-completed" : ""} ${playable ? "is-playable" : ""}`}
       style={{ gridArea: quest.gridArea }}
@@ -49,7 +51,7 @@ function QuestNode({
       aria-label={
         playable
           ? `${quest.title}, playable, enter mission`
-          : `${quest.title}, ${quest.status}`
+          : `${quest.title}, ${displayStatus}`
       }
     >
       <span className="node-cap">
@@ -57,12 +59,12 @@ function QuestNode({
           ? "[CLEARED]"
           : playable
             ? "[PLAYABLE]"
-          : quest.status === "locked"
+          : displayStatus === "locked"
             ? "[LOCKED]"
             : `[${quest.index}]`}
       </span>
       <span className="node-core">
-        {quest.status === "secret" ? "?" : quest.index}
+        {displayStatus === "secret" ? "?" : quest.index}
       </span>
       <strong>{quest.title}</strong>
       <small>{quest.subtitle}</small>
@@ -71,36 +73,67 @@ function QuestNode({
   );
 }
 
+const progressStorageKey = "algoquest.cleared-quests";
+
+function loadLocalProgress() {
+  const cleared = new Set<string>();
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem(progressStorageKey) ?? "[]",
+    ) as unknown;
+    if (Array.isArray(saved)) {
+      saved.forEach((questId) => {
+        if (typeof questId === "string") cleared.add(questId);
+      });
+    }
+  } catch {
+    // A damaged local save must not prevent the game from opening.
+  }
+  if (window.localStorage.getItem("algoquest.signal-fire") === "cleared") {
+    cleared.add("signal-fire");
+  }
+  return cleared;
+}
+
 export default function Home() {
   const [selected, setSelected] = useState<Quest>(quests[0]);
   const [notice, setNotice] = useState("SYSTEM READY // SELECT A QUEST");
   const [screen, setScreen] = useState<"world" | "mission">("world");
-  const [cleared, setCleared] = useState(false);
+  const [cleared, setCleared] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     // Browser persistence is intentionally synchronized after hydration.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCleared(window.localStorage.getItem("algoquest.signal-fire") === "cleared");
+    setCleared(loadLocalProgress());
     void loadQuestProgress()
       .then((progress) => {
-        if (
-          progress.some(
-            (item) =>
-              item.questId === "signal-fire" && item.status === "cleared",
-          )
-        ) {
-          window.localStorage.setItem("algoquest.signal-fire", "cleared");
-          setCleared(true);
-        }
+        setCleared((current) => {
+          const merged = new Set(current);
+          progress
+            .filter((item) => item.status === "cleared")
+            .forEach((item) => merged.add(item.questId));
+          window.localStorage.setItem(
+            progressStorageKey,
+            JSON.stringify([...merged]),
+          );
+          return merged;
+        });
       })
       .catch(() => {
         // Local progress remains usable while the API service is offline.
       });
 
     const syncScreenFromHash = () => {
-      setScreen(
-        window.location.hash === "#mission/signal-fire" ? "mission" : "world",
+      const missionId = window.location.hash.match(/^#mission\/([a-z0-9-]+)$/)?.[1];
+      const mission = quests.find(
+        (quest) => quest.id === missionId && quest.problem,
       );
+      if (mission) {
+        setSelected(mission);
+        setScreen("mission");
+      } else {
+        setScreen("world");
+      }
     };
 
     syncScreenFromHash();
@@ -108,32 +141,63 @@ export default function Home() {
     return () => window.removeEventListener("hashchange", syncScreenFromHash);
   }, []);
 
-  const completeFirstQuest = () => {
-    window.localStorage.setItem("algoquest.signal-fire", "cleared");
-    setCleared(true);
-    void saveQuestProgress("signal-fire", 100).catch(() => {
+  const completeQuest = (questId: string, score: number) => {
+    setCleared((current) => {
+      const updated = new Set(current);
+      updated.add(questId);
+      window.localStorage.setItem(
+        progressStorageKey,
+        JSON.stringify([...updated]),
+      );
+      return updated;
+    });
+    void saveQuestProgress(questId, score).catch(() => {
       // The accepted submission is still visible locally and can sync later.
     });
   };
 
-  const openFirstQuest = () => {
-    setSelected(quests[0]);
-    setNotice("QUEST 01 LAUNCHED // JUDGE LINK ACTIVE");
+  const openQuest = (quest: Quest) => {
+    if (!isQuestUnlocked(quest, cleared)) {
+      setSelected(quest);
+      setNotice(
+        quest.status === "secret"
+          ? "ANOMALY DETECTED // ACCESS CONDITION UNKNOWN"
+          : `ACCESS DENIED // CLEAR ${quest.prerequisites.join(", ").toUpperCase()}`,
+      );
+      return;
+    }
+    setSelected(quest);
+    setNotice(`QUEST ${quest.index} LAUNCHED // JUDGE LINK ACTIVE`);
     setScreen("mission");
-    window.history.replaceState(null, "", "#mission/signal-fire");
+    window.history.replaceState(null, "", `#mission/${quest.id}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const exitMission = () => {
     setScreen("world");
     setNotice(
-      cleared
-        ? "QUEST 01 CLEARED // FORKED PATH UNLOCKED"
+      cleared.has(selected.id)
+        ? `QUEST ${selected.index} CLEARED // ROUTE UPDATED`
         : "MISSION SUSPENDED // PROGRESS KEPT",
     );
     window.history.replaceState(null, "", "#map");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  const playableQuests = quests.filter((quest) =>
+    isQuestUnlocked(quest, cleared),
+  );
+  const nextQuest =
+    playableQuests.find((quest) => !cleared.has(quest.id)) ??
+    playableQuests.at(-1) ??
+    quests[0];
+  const nextAfterSelected = quests.find((quest) =>
+    quest.prerequisites.includes(selected.id),
+  );
+  const totalXp = quests
+    .filter((quest) => cleared.has(quest.id))
+    .reduce((sum, quest) => sum + quest.xp, 0);
+  const selectedPlayable = isQuestUnlocked(selected, cleared);
 
   return (
     <main className="site-shell">
@@ -153,7 +217,7 @@ export default function Home() {
         </nav>
         <div className="player-chip">
           <span className="online-dot" />
-          INLINEINT // {cleared ? "LV.02" : "LV.01"}
+          INLINEINT // LV.{String(cleared.size + 1).padStart(2, "0")}
         </div>
       </header>
 
@@ -167,8 +231,11 @@ export default function Home() {
 
       {screen === "mission" ? (
         <MissionTerminal
+          key={selected.id}
+          quest={selected}
+          nextQuestTitle={nextAfterSelected?.title}
           onExit={exitMission}
-          onComplete={completeFirstQuest}
+          onComplete={completeQuest}
         />
       ) : (
         <>
@@ -191,9 +258,10 @@ export default function Home() {
             <button
               className="primary-button"
               type="button"
-              onClick={openFirstQuest}
+              onClick={() => openQuest(nextQuest)}
             >
-              &gt; {cleared ? "REPLAY QUEST_01" : "START QUEST_01"}
+              &gt; {cleared.has(nextQuest.id) ? "REPLAY" : "CONTINUE"} QUEST_
+              {nextQuest.index}
             </button>
             <button
               className="text-button"
@@ -224,10 +292,10 @@ export default function Home() {
           </div>
           <div className="stat-row">
             <span>XP</span>
-            <strong>{cleared ? "120 / 260" : "000 / 120"}</strong>
+            <strong>{String(totalXp).padStart(3, "0")} / 420</strong>
           </div>
           <div className="progress-track">
-            <span style={{ width: cleared ? "46%" : "8%" }} />
+            <span style={{ width: `${Math.min(100, (totalXp / 420) * 100)}%` }} />
           </div>
           <div className="stat-row">
             <span>STREAK</span>
@@ -249,9 +317,15 @@ export default function Home() {
           </div>
         </div>
 
-        <button className="playable-banner" type="button" onClick={openFirstQuest}>
-          <span>PLAYABLE NOW</span>
-          <strong>QUEST 01 // SIGNAL FIRE</strong>
+        <button
+          className="playable-banner"
+          type="button"
+          onClick={() => openQuest(nextQuest)}
+        >
+          <span>{cleared.has(nextQuest.id) ? "REPLAYABLE" : "NEXT MISSION"}</span>
+          <strong>
+            {`QUEST ${nextQuest.index} // ${nextQuest.title.toUpperCase()}`}
+          </strong>
           <span>&gt; CLICK TO ENTER_</span>
         </button>
 
@@ -264,24 +338,31 @@ export default function Home() {
               <span className="path p4">············</span>
               <span className="path p5">·······</span>
             </div>
-            {quests.map((quest) => (
-              <QuestNode
-                key={quest.id}
-                quest={quest}
-                selected={selected.id === quest.id}
-                completed={cleared && quest.id === "signal-fire"}
-                playable={quest.id === "signal-fire"}
-                onSelect={() => {
-                  setSelected(quest);
-                  setNotice(
-                    quest.status === "secret"
-                      ? "ANOMALY DETECTED // ACCESS CONDITION UNKNOWN"
-                      : `QUEST SELECTED // ${quest.title.toUpperCase()}`,
-                  );
-                }}
-                onOpen={openFirstQuest}
-              />
-            ))}
+            {quests.map((quest) => {
+              const playable = isQuestUnlocked(quest, cleared);
+              const completed = cleared.has(quest.id);
+              const displayStatus =
+                playable || completed ? "available" : quest.status;
+              return (
+                <QuestNode
+                  key={quest.id}
+                  quest={quest}
+                  selected={selected.id === quest.id}
+                  completed={completed}
+                  playable={playable}
+                  displayStatus={displayStatus}
+                  onSelect={() => {
+                    setSelected(quest);
+                    setNotice(
+                      quest.status === "secret"
+                        ? "ANOMALY DETECTED // ACCESS CONDITION UNKNOWN"
+                        : `QUEST SELECTED // ${quest.title.toUpperCase()}`,
+                    );
+                  }}
+                  onOpen={() => openQuest(quest)}
+                />
+              );
+            })}
           </div>
 
           <aside className="quest-brief" id="missions">
@@ -290,7 +371,11 @@ export default function Home() {
               <span>#{selected.index}</span>
             </div>
             <p className="quest-kicker">
-              {selected.status === "secret" ? "ENCRYPTED ENCOUNTER" : "MISSION BRIEF"}
+              {selected.status === "secret"
+                ? "ENCRYPTED ENCOUNTER"
+                : selectedPlayable
+                  ? "MISSION READY"
+                  : "MISSION BRIEF"}
             </p>
             <h3>{selected.title}</h3>
             <p>{selected.description}</p>
@@ -315,24 +400,20 @@ export default function Home() {
 
             <button
               className="launch-button"
-              disabled={selected.status === "secret"}
-              onClick={() => {
-                if (selected.id === "signal-fire") {
-                  openFirstQuest();
-                } else {
-                  setNotice(
-                    cleared
-                      ? "QUEST 02 TERMINAL // CONTENT PACK PENDING"
-                      : "COMPLETE QUEST 01 TO OPEN THIS MISSION",
-                  );
-                }
-              }}
+              disabled={!selectedPlayable}
+              onClick={() => openQuest(selected)}
             >
               {selected.status === "secret"
                 ? "[ ACCESS DENIED ]"
-                : selected.id === "signal-fire"
+                : selectedPlayable
                   ? "> ENTER MISSION_"
-                  : "[ PREREQUISITE REQUIRED ]"}
+                  : `[ CLEAR QUEST ${selected.prerequisites
+                      .map(
+                        (questId) =>
+                          quests.find((quest) => quest.id === questId)?.index ??
+                          "??",
+                      )
+                      .join(" + ")} ]`}
             </button>
           </aside>
         </div>

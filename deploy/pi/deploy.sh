@@ -76,6 +76,17 @@ if [[ "${mode}" == "all" || "${mode}" == "judge" ]]; then
   fi
 fi
 
+if [[ "${mode}" == "all" ]]; then
+  echo "Running the Core API end-to-end smoke test..."
+  if ! docker compose \
+    --env-file "${env_file}" \
+    exec -T api node scripts/smoke.mjs; then
+    docker compose --env-file "${env_file}" logs --tail 100 api judge
+    echo "Core API smoke test failed. Submission polling or progress persistence is unavailable." >&2
+    exit 1
+  fi
+fi
+
 docker compose --env-file "${env_file}" ps
 
 if [[ "${mode}" == "all" || "${mode}" == "web" ]]; then

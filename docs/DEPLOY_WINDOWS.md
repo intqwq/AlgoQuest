@@ -26,7 +26,9 @@ The command:
 3. builds the GNU C++14 runner;
 4. builds and starts Web, API, Judge, and PostgreSQL;
 5. submits a known-correct C++ program to the isolated runner and requires AC;
-6. prints the service addresses.
+6. repeats the submission through the Core API, polls to AC, and verifies
+   progress persistence;
+7. prints the service addresses.
 
 Open <http://localhost:8080>.
 
@@ -99,6 +101,8 @@ algoquest-judge-cache
 - Runner fails immediately: confirm Docker Desktop is using Linux containers.
 - Judge smoke test fails: read the result printed by the script and run
   `docker compose --env-file .env.windows logs --tail 100 judge`.
+- Core API smoke test fails: inspect both `api` and `judge` logs; this check
+  covers the complete create → poll → AC → progress path.
 - API health is degraded: inspect `api` logs, then `db` and `judge` health.
 - Web loads but submissions are offline: confirm `/api/v1/sessions` reaches the
   API and that API/Judge `JUDGE_API_TOKEN` values match.

@@ -98,6 +98,17 @@ try {
         }
     }
 
+    if ($Mode -eq "all") {
+        Write-Host "Running the Core API end-to-end smoke test..."
+        & docker compose `
+            --env-file $EnvFile `
+            exec -T api node scripts/smoke.mjs
+        if ($LASTEXITCODE -ne 0) {
+            & docker compose --env-file $EnvFile logs --tail 100 api judge
+            throw "Core API smoke test failed. Submission polling or progress persistence is unavailable."
+        }
+    }
+
     & docker compose --env-file $EnvFile ps
     Write-Host ""
     switch ($Mode) {

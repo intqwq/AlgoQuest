@@ -1,5 +1,21 @@
 export type QuestStatus = "available" | "locked" | "secret";
 
+export type QuestProblem = {
+  story: string[];
+  input: string;
+  constraints: string;
+  output: string;
+  sampleInput: string;
+  sampleOutput: string;
+  hint: string;
+  hintMarker: string;
+  hintCode: string;
+  starterCode: string;
+  testCaseCount: number;
+  timeLimitSeconds: number;
+  memoryLimitMb: number;
+};
+
 export type Quest = {
   id: string;
   index: string;
@@ -8,10 +24,12 @@ export type Quest = {
   difficulty: 1 | 2 | 3 | 4 | 5;
   xp: number;
   status: QuestStatus;
+  prerequisites: string[];
   chapter: string;
   gridArea: string;
   description: string;
   skills: string[];
+  problem?: QuestProblem;
 };
 
 export const quests: Quest[] = [
@@ -23,11 +41,43 @@ export const quests: Quest[] = [
     difficulty: 1,
     xp: 120,
     status: "available",
+    prerequisites: [],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q1",
     description:
       "Wake the dormant relay by reading two energy values and printing their sum.",
     skills: ["cin / cout", "variables", "arithmetic"],
+    problem: {
+      story: [
+        "The outpost relay has slept for 4,096 cycles. Two energy cells remain, carrying a and b units.",
+        "Read both values and output their sum to ignite the signal fire.",
+      ],
+      input: "One line containing two integers a and b.",
+      constraints: "-10⁹ ≤ a, b ≤ 10⁹",
+      output: "Print one integer: the combined energy.",
+      sampleInput: "7 35",
+      sampleOutput: "42",
+      hint: "The relay listens through cout. Send it the value of a + b.",
+      hintMarker: "    // TODO: transmit the combined energy",
+      hintCode: "    cout << a + b << '\\n';",
+      starterCode: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    long long a, b;
+    cin >> a >> b;
+
+    // TODO: transmit the combined energy
+
+    return 0;
+}`,
+      testCaseCount: 4,
+      timeLimitSeconds: 1,
+      memoryLimitMb: 64,
+    },
   },
   {
     id: "forked-path",
@@ -36,12 +86,48 @@ export const quests: Quest[] = [
     subtitle: "Conditionals",
     difficulty: 1,
     xp: 140,
-    status: "available",
+    status: "locked",
+    prerequisites: ["signal-fire"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q2",
     description:
       "Choose the safer tunnel by comparing two danger readings.",
     skills: ["if / else", "comparison"],
+    problem: {
+      story: [
+        "The road divides beneath the mountain. The left and right tunnels report separate danger readings.",
+        "Choose the tunnel with the smaller reading. If both readings match, hold position.",
+      ],
+      input: "One line containing two integers left and right.",
+      constraints: "-10⁹ ≤ left, right ≤ 10⁹",
+      output:
+        'Print "LEFT" if left is safer, "RIGHT" if right is safer, or "EQUAL" if they match.',
+      sampleInput: "17 29",
+      sampleOutput: "LEFT",
+      hint:
+        "Compare the readings with if and else if. Remember the equality case.",
+      hintMarker: "    // TODO: choose the safer tunnel",
+      hintCode: `    if (left < right) cout << "LEFT\\n";
+    else if (right < left) cout << "RIGHT\\n";
+    else cout << "EQUAL\\n";`,
+      starterCode: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    long long left, right;
+    cin >> left >> right;
+
+    // TODO: choose the safer tunnel
+
+    return 0;
+}`,
+      testCaseCount: 5,
+      timeLimitSeconds: 1,
+      memoryLimitMb: 64,
+    },
   },
   {
     id: "echo-loop",
@@ -51,10 +137,47 @@ export const quests: Quest[] = [
     difficulty: 1,
     xp: 160,
     status: "locked",
+    prerequisites: ["forked-path"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q3",
     description: "Repeat the ancient signal until the gate responds.",
     skills: ["for", "while"],
+    problem: {
+      story: [
+        "A sealed gate accepts a rising sequence of pulses, beginning at one.",
+        "Transmit every pulse from 1 through n on one line, separated by spaces.",
+      ],
+      input: "One integer n.",
+      constraints: "1 ≤ n ≤ 1,000",
+      output: "Print 1, 2, …, n on one line, separated by one space.",
+      sampleInput: "5",
+      sampleOutput: "1 2 3 4 5",
+      hint:
+        "A for loop can visit every value from 1 through n. Print a space only before values after the first.",
+      hintMarker: "    // TODO: repeat the pulse",
+      hintCode: `    for (int i = 1; i <= n; ++i) {
+        if (i > 1) cout << ' ';
+        cout << i;
+    }
+    cout << '\\n';`,
+      starterCode: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    int n;
+    cin >> n;
+
+    // TODO: repeat the pulse
+
+    return 0;
+}`,
+      testCaseCount: 5,
+      timeLimitSeconds: 1,
+      memoryLimitMb: 64,
+    },
   },
   {
     id: "array-vault",
@@ -64,6 +187,7 @@ export const quests: Quest[] = [
     difficulty: 2,
     xp: 220,
     status: "locked",
+    prerequisites: ["echo-loop"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q4",
     description: "Reconstruct a key hidden across a sequence of memory cells.",
@@ -77,6 +201,7 @@ export const quests: Quest[] = [
     difficulty: 2,
     xp: 260,
     status: "locked",
+    prerequisites: ["array-vault"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q5",
     description: "Restore a shattered archive by returning every rune to order.",
@@ -90,6 +215,7 @@ export const quests: Quest[] = [
     difficulty: 2,
     xp: 300,
     status: "locked",
+    prerequisites: ["sorting-ruins"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q6",
     description: "Find one frequency among millions before the gate closes.",
@@ -103,6 +229,7 @@ export const quests: Quest[] = [
     difficulty: 3,
     xp: 500,
     status: "secret",
+    prerequisites: [],
     chapter: "SECRET / UNKNOWN",
     gridArea: "secret",
     description: "The wall sounds hollow here. Something waits behind it.",
@@ -110,3 +237,10 @@ export const quests: Quest[] = [
   },
 ];
 
+export function isQuestUnlocked(quest: Quest, cleared: Set<string>) {
+  return (
+    quest.status !== "secret" &&
+    quest.problem !== undefined &&
+    quest.prerequisites.every((questId) => cleared.has(questId))
+  );
+}

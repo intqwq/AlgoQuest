@@ -1,8 +1,9 @@
 # AlgoQuest
 
 AlgoQuest is an ASCII-art competitive-programming adventure. The current
-vertical slice contains a playable world map, a C++14 lesson, an asynchronous
-Docker-isolated judge, and persistent player progress.
+vertical slice contains a playable world map, three unlockable C++14 missions
+(I/O, conditionals, and loops), an asynchronous Docker-isolated judge, and
+persistent player progress.
 
 The hosted preview is available at
 [algoquest.intqwq.chatgpt.site](https://algoquest.intqwq.chatgpt.site). The
@@ -136,6 +137,10 @@ Run the real Docker Judge regression suite on a Docker host:
 ```bash
 JUDGE_DOCKER_TEST=1 npm --prefix judge test
 ```
+
+The Windows and Raspberry Pi `all` deployment commands also run two live smoke
+tests: the isolated runner must accept known-correct C++, then the Core API must
+submit, poll, receive `AC`, and persist the cleared quest.
 
 ## Repository layout
 

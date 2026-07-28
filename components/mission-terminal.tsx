@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { apiUrl, authenticatedFetch } from "@/lib/api-client";
+import { Quest } from "@/lib/quests";
 
 type Verdict = "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
 type JudgeState =
@@ -15,8 +16,6 @@ type JudgeState =
 
 type CaseResult = {
   id: string;
-  input: string;
-  expected: string;
   verdict: "WAIT" | "RUN" | Verdict;
   time?: string;
   memory?: string;
@@ -57,60 +56,45 @@ class JudgeRequestError extends Error {
   }
 }
 
-const starterCode = `#include <bits/stdc++.h>
-using namespace std;
-
-int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-
-    int a, b;
-    cin >> a >> b;
-
-    // TODO: transmit the combined energy
-
-    return 0;
-}`;
-
-const acceptedLine = `    cout << a + b << '\\n';`;
-
-const tests = [
-  { id: "01", input: "7 35", expected: "42" },
-  { id: "02", input: "-19 8", expected: "-11" },
-  { id: "03", input: "1000000000 1000000000", expected: "2000000000" },
-  { id: "04", input: "-1000000000 1000000000", expected: "0" },
-];
-
 const judgeApi = apiUrl("/judge/submissions");
+const transientPollStatuses = new Set([429, 502, 503, 504]);
+const maxConsecutivePollFailures = 10;
 
 const delay = (milliseconds: number) =>
   new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
+async function responseBody(response: Response) {
+  return response.json().catch(() => ({})) as Promise<{
+    error?: string;
+    retryAfterMs?: number;
+    submission?: Submission;
+  }>;
+}
+
 async function requestJudge(
+  questId: string,
   source: string,
   mode: "sample" | "submit",
   onUpdate: (submission: Submission) => void,
+  onConnectionIssue: (attempt: number, retryAfterMs: number) => void,
 ): Promise<JudgeResponse> {
   const response = await authenticatedFetch(judgeApi, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      questId: "signal-fire",
+      questId,
       language: "cpp14",
       source,
       mode,
     }),
   });
-  const body = (await response.json()) as {
-    error?: string;
-    retryAfterMs?: number;
-    submission?: Submission;
-  };
+  const body = await responseBody(response);
   if (!response.ok && !body.submission) {
     const messages: Record<string, string> = {
       QUEUE_FULL: "The judge queue is full. Wait a moment and retry.",
       SUBMISSION_COOLDOWN: `Submission cooldown: ${Math.ceil((body.retryAfterMs ?? 1000) / 1000)}s remaining.`,
       ACTIVE_SUBMISSION: "This player already has a submission in flight.",
+      QUEST_LOCKED: "Clear the prerequisite mission before entering this quest.",
     };
     throw new JudgeRequestError(
       body.error ?? "JUDGE_FAILURE",
@@ -124,24 +108,46 @@ async function requestJudge(
   }
   onUpdate(submission);
 
+  let consecutiveFailures = 0;
   while (!["DONE", "ERROR"].includes(submission.status)) {
     const jitter = Math.floor(Math.random() * 120);
     await delay((submission.pollAfterMs ?? 1000) + jitter);
-    const poll = await authenticatedFetch(
-      `${judgeApi.replace(/\/$/, "")}/${submission.id}`,
-      {
-      headers: { accept: "application/json" },
-      },
-    );
-    if (!poll.ok) {
-      throw new JudgeRequestError(
-        "POLL_FAILED",
-        `Judge status returned HTTP ${poll.status}.`,
+
+    try {
+      const poll = await authenticatedFetch(
+        `${judgeApi.replace(/\/$/, "")}/${submission.id}`,
+        { headers: { accept: "application/json" } },
       );
+      const polled = await responseBody(poll);
+      if (!poll.ok || !polled.submission) {
+        if (!transientPollStatuses.has(poll.status)) {
+          throw new JudgeRequestError(
+            polled.error ?? "POLL_FAILED",
+            `Judge status returned HTTP ${poll.status}.`,
+          );
+        }
+        throw new Error(`transient:${poll.status}`);
+      }
+
+      submission = polled.submission;
+      consecutiveFailures = 0;
+      onUpdate(submission);
+    } catch (error) {
+      if (error instanceof JudgeRequestError) throw error;
+      consecutiveFailures += 1;
+      if (consecutiveFailures > maxConsecutivePollFailures) {
+        throw new JudgeRequestError(
+          "POLL_TIMEOUT",
+          "Judge status could not be reached after repeated retries. The job remains recoverable on the server.",
+        );
+      }
+      const retryAfterMs = Math.min(
+        5000,
+        400 * 2 ** Math.min(consecutiveFailures - 1, 4),
+      );
+      onConnectionIssue(consecutiveFailures, retryAfterMs);
+      await delay(retryAfterMs);
     }
-    const polled = (await poll.json()) as { submission: Submission };
-    submission = polled.submission;
-    onUpdate(submission);
   }
 
   if (submission.status === "ERROR" || !submission.verdict) {
@@ -159,17 +165,34 @@ async function requestJudge(
 }
 
 export function MissionTerminal({
+  quest,
+  nextQuestTitle,
   onExit,
   onComplete,
 }: {
+  quest: Quest;
+  nextQuestTitle?: string;
   onExit: () => void;
-  onComplete: () => void;
+  onComplete: (questId: string, score: number) => void;
 }) {
-  const [code, setCode] = useState(starterCode);
-  const [judgeState, setJudgeState] = useState<JudgeState>("idle");
-  const [results, setResults] = useState<CaseResult[]>(
-    tests.map((test) => ({ ...test, verdict: "WAIT" })),
+  const problem = quest.problem;
+  if (!problem) {
+    throw new Error(`Quest ${quest.id} has no playable problem definition.`);
+  }
+
+  const caseIds = useMemo(
+    () =>
+      Array.from({ length: problem.testCaseCount }, (_, index) =>
+        String(index + 1).padStart(2, "0"),
+      ),
+    [problem.testCaseCount],
   );
+  const emptyResults = () =>
+    caseIds.map((id) => ({ id, verdict: "WAIT" as const }));
+
+  const [code, setCode] = useState(problem.starterCode);
+  const [judgeState, setJudgeState] = useState<JudgeState>("idle");
+  const [results, setResults] = useState<CaseResult[]>(emptyResults);
   const [consoleText, setConsoleText] = useState(
     "$ judge --awaiting-source\n> Edit main.cpp, then run the sample.",
   );
@@ -216,27 +239,51 @@ export function MissionTerminal({
     if (submission.status === "RUNNING") {
       setJudgeState("running");
       setResults(
-        tests.map((test, index) => {
-          const result = submission.cases.find((item) => item.id === test.id);
+        caseIds.map((id, index) => {
+          const result = submission.cases.find((item) => item.id === id);
           if (result) {
             return {
-              ...test,
+              id,
               verdict: result.verdict,
               time: `${result.timeMs} ms`,
               memory: `${(result.memoryKb / 1024).toFixed(2)} MB`,
             };
           }
           return {
-            ...test,
+            id,
             verdict:
-              index === submission.cases.length ? ("RUN" as const) : ("WAIT" as const),
+              index === submission.cases.length
+                ? ("RUN" as const)
+                : ("WAIT" as const),
           };
         }),
       );
       setConsoleText(
-        `$ judge --hidden-cases\n[ RUNNING ] ${submission.cases.length} / ${tests.length} complete\n> Cases execute as isolated child processes inside the same submission container.\n> First failure stops the run early.`,
+        `$ judge --hidden-cases\n[ RUNNING ] ${submission.cases.length} / ${caseIds.length} complete\n> Cases execute as isolated child processes inside the same submission container.\n> First failure stops the run early.`,
       );
     }
+  };
+
+  const showConnectionRetry = (attempt: number, retryAfterMs: number) => {
+    setConsoleText(
+      `$ judge --status\n[ LINK UNSTABLE ] retry ${attempt}/${maxConsecutivePollFailures}\n> Submission is still active. Reconnecting in ${(retryAfterMs / 1000).toFixed(1)}s; no resubmission is needed.`,
+    );
+  };
+
+  const handleRequestError = (error: unknown) => {
+    const requestError =
+      error instanceof JudgeRequestError ? error : undefined;
+    setJudgeState(
+      requestError?.code === "QUEUE_FULL" ||
+        requestError?.code === "SUBMISSION_COOLDOWN"
+        ? "failed"
+        : "offline",
+    );
+    setConsoleText(
+      requestError
+        ? `$ judge --request\n[ ${requestError.code} ]\n${requestError.message}`
+        : "$ judge --connect\n[ JUDGE OFFLINE ]\nThe isolated runner is not reachable. Start the Judge service and rerun its smoke test.",
+    );
   };
 
   const runSample = async () => {
@@ -244,55 +291,79 @@ export function MissionTerminal({
     setJudgeState("queued");
     setConsoleText("$ run --sample\n> Creating an isolated judge job...");
     try {
-      const response = await requestJudge(code, "sample", applySubmissionUpdate);
+      const response = await requestJudge(
+        quest.id,
+        code,
+        "sample",
+        applySubmissionUpdate,
+        showConnectionRetry,
+      );
       const sample = response.cases[0];
-      if (response.verdict === "AC" || sample?.verdict === "AC") {
+      if (sample?.verdict === "AC") {
+        setResults((current) =>
+          current.map((result, index) =>
+            index === 0
+              ? {
+                  ...result,
+                  verdict: "AC",
+                  time: `${sample.timeMs} ms`,
+                  memory: `${(sample.memoryKb / 1024).toFixed(2)} MB`,
+                }
+              : result,
+          ),
+        );
         setConsoleText(
-          `$ run --sample\nINPUT    7 35\nEXPECTED 42\nRECEIVED 42\nTIME     ${sample.timeMs} ms\nMEMORY   ${(sample.memoryKb / 1024).toFixed(2)} MB\n[ SAMPLE PASSED ]`,
+          `$ run --sample\nINPUT    ${problem.sampleInput}\nEXPECTED ${problem.sampleOutput}\nRECEIVED ${problem.sampleOutput}\nTIME     ${sample.timeMs} ms\nMEMORY   ${(sample.memoryKb / 1024).toFixed(2)} MB\n[ SAMPLE PASSED ]`,
         );
         setJudgeState("idle");
       } else {
+        if (sample) {
+          setResults((current) =>
+            current.map((result, index) =>
+              index === 0
+                ? {
+                    ...result,
+                    verdict: sample.verdict,
+                    time: `${sample.timeMs} ms`,
+                    memory: `${(sample.memoryKb / 1024).toFixed(2)} MB`,
+                  }
+                : result,
+            ),
+          );
+        }
         setConsoleText(formatFailure(response));
         setJudgeState("failed");
       }
     } catch (error) {
-      const requestError =
-        error instanceof JudgeRequestError ? error : undefined;
-      setJudgeState(
-        requestError?.code === "QUEUE_FULL" ||
-          requestError?.code === "SUBMISSION_COOLDOWN"
-          ? "failed"
-          : "offline",
-      );
-      setConsoleText(
-        requestError
-          ? `$ judge --request\n[ ${requestError.code} ]\n${requestError.message}`
-          : "$ judge --connect\n[ JUDGE OFFLINE ]\nThe isolated runner is not reachable. Start the Judge service or configure NEXT_PUBLIC_JUDGE_API_URL.",
-      );
+      handleRequestError(error);
     }
   };
 
   const submit = async () => {
     if (["queued", "compiling", "running"].includes(judgeState)) return;
     setJudgeState("queued");
-    setResults(tests.map((test) => ({ ...test, verdict: "WAIT" })));
-    setConsoleText(
-      "$ submit main.cpp\n> Reserving a bounded queue slot...",
-    );
+    setResults(emptyResults());
+    setConsoleText("$ submit main.cpp\n> Reserving a bounded queue slot...");
 
     try {
-      const response = await requestJudge(code, "submit", applySubmissionUpdate);
+      const response = await requestJudge(
+        quest.id,
+        code,
+        "submit",
+        applySubmissionUpdate,
+        showConnectionRetry,
+      );
       setResults(
-        tests.map((test) => {
-          const result = response.cases.find((item) => item.id === test.id);
+        caseIds.map((id) => {
+          const result = response.cases.find((item) => item.id === id);
           return result
             ? {
-                ...test,
+                id,
                 verdict: result.verdict,
                 time: `${result.timeMs} ms`,
                 memory: `${(result.memoryKb / 1024).toFixed(2)} MB`,
               }
-            : { ...test, verdict: "WAIT" };
+            : { id, verdict: "WAIT" };
         }),
       );
 
@@ -303,39 +374,27 @@ export function MissionTerminal({
         );
         setJudgeState("accepted");
         setConsoleText(
-          `$ verdict\n[ ACCEPTED ] ${response.cases.length} / ${response.cases.length} cases\nTIME   ${maxTime} ms max\nMEMORY ${(maxMemory / 1024).toFixed(2)} MB max\nSCORE  100 / 100\nREWARD +120 XP`,
+          `$ verdict\n[ ACCEPTED ] ${response.cases.length} / ${response.cases.length} cases\nTIME   ${maxTime} ms max\nMEMORY ${(maxMemory / 1024).toFixed(2)} MB max\nSCORE  100 / 100\nREWARD +${quest.xp} XP`,
         );
-        onComplete();
+        onComplete(quest.id, 100);
       } else {
         setJudgeState("failed");
         setConsoleText(formatFailure(response));
       }
     } catch (error) {
-      const requestError =
-        error instanceof JudgeRequestError ? error : undefined;
-      setJudgeState(
-        requestError?.code === "QUEUE_FULL" ||
-          requestError?.code === "SUBMISSION_COOLDOWN"
-          ? "failed"
-          : "offline",
-      );
-      setConsoleText(
-        requestError
-          ? `$ judge --request\n[ ${requestError.code} ]\n${requestError.message}`
-          : "$ judge --connect\n[ JUDGE OFFLINE ]\nThe isolated runner is not reachable. Start the Judge service or configure NEXT_PUBLIC_JUDGE_API_URL.",
-      );
+      handleRequestError(error);
     }
   };
 
   const insertHint = () => {
-    if (code.includes("cout << a + b")) return;
+    if (!code.includes(problem.hintMarker)) return;
     setCode((current) =>
       current.replace(
-        "    // TODO: transmit the combined energy",
-        `${acceptedLine}\n\n    // The relay is listening.`,
+        problem.hintMarker,
+        `${problem.hintCode}\n\n    // Codex transmission applied.`,
       ),
     );
-    setConsoleText("$ codex --apply-hint\n> Output instruction inserted.");
+    setConsoleText("$ codex --apply-hint\n> Guidance inserted into main.cpp.");
   };
 
   return (
@@ -345,13 +404,13 @@ export function MissionTerminal({
           &lt; WORLD_MAP
         </button>
         <div className="mission-id">
-          <span>QUEST_01</span>
-          <strong>SIGNAL FIRE</strong>
+          <span>QUEST_{quest.index}</span>
+          <strong>{quest.title.toUpperCase()}</strong>
         </div>
         <div className="mission-flags">
           <span>C++14</span>
-          <span>TIME 1.0s</span>
-          <span>MEM 64MB</span>
+          <span>TIME {problem.timeLimitSeconds.toFixed(1)}s</span>
+          <span>MEM {problem.memoryLimitMb}MB</span>
         </div>
       </div>
 
@@ -362,38 +421,35 @@ export function MissionTerminal({
             <button disabled>EDITORIAL</button>
           </div>
           <div className="pane-scroll">
-            <p className="eyebrow">CH.01 // FIRST TRANSMISSION</p>
-            <h1>Signal Fire</h1>
+            <p className="eyebrow">{`${quest.chapter} // ACTIVE MISSION`}</p>
+            <h1>{quest.title}</h1>
             <div className="problem-meta">
-              <span>DIFFICULTY ◆◇◇◇◇</span>
-              <span>REWARD +120 XP</span>
+              <span>
+                DIFFICULTY {"◆".repeat(quest.difficulty)}
+                {"◇".repeat(5 - quest.difficulty)}
+              </span>
+              <span>REWARD +{quest.xp} XP</span>
             </div>
-            <p>
-              The outpost relay has slept for 4,096 cycles. Two energy cells
-              remain, carrying <code>a</code> and <code>b</code> units.
-            </p>
-            <p>
-              Read both values and output their sum to ignite the signal fire.
-            </p>
+            {problem.story.map((paragraph) => (
+              <p key={paragraph}>{paragraph}</p>
+            ))}
 
             <h2>INPUT</h2>
-            <p>
-              One line containing two integers <code>a</code> and <code>b</code>.
-            </p>
-            <pre className="constraint-box">-10⁹ ≤ a, b ≤ 10⁹</pre>
+            <p>{problem.input}</p>
+            <pre className="constraint-box">{problem.constraints}</pre>
 
             <h2>OUTPUT</h2>
-            <p>Print one integer: the combined energy.</p>
+            <p>{problem.output}</p>
 
             <h2>SAMPLE</h2>
             <div className="sample-grid">
               <div>
                 <span>INPUT</span>
-                <pre>7 35</pre>
+                <pre>{problem.sampleInput}</pre>
               </div>
               <div>
                 <span>OUTPUT</span>
-                <pre>42</pre>
+                <pre>{problem.sampleOutput}</pre>
               </div>
             </div>
 
@@ -406,10 +462,7 @@ export function MissionTerminal({
             {hintOpen && (
               <div className="hint-card">
                 <strong>CODEX WHISPER</strong>
-                <p>
-                  The relay listens through <code>cout</code>. Send it the value
-                  of <code>a + b</code>.
-                </p>
+                <p>{problem.hint}</p>
                 <button onClick={insertHint}>[ INSERT HINT INTO EDITOR ]</button>
               </div>
             )}
@@ -435,9 +488,7 @@ export function MissionTerminal({
                 setCode(event.target.value);
                 if (judgeState !== "idle") {
                   setJudgeState("idle");
-                  setResults(
-                    tests.map((test) => ({ ...test, verdict: "WAIT" })),
-                  );
+                  setResults(emptyResults());
                 }
               }}
             />
@@ -475,7 +526,9 @@ export function MissionTerminal({
             {results.map((result) => (
               <div className="case-row" key={result.id}>
                 <span>CASE #{result.id}</span>
-                <strong className={`verdict verdict--${result.verdict.toLowerCase()}`}>
+                <strong
+                  className={`verdict verdict--${result.verdict.toLowerCase()}`}
+                >
                   {result.verdict}
                 </strong>
                 <small>{result.time ?? "--"}</small>
@@ -485,18 +538,22 @@ export function MissionTerminal({
           </div>
 
           <div className="judge-note">
-            <span>ISOLATED JUDGE</span>
+            <span>RECOVERABLE STATUS LINK</span>
             <p>
-              One submission uses one disposable container. Hidden cases run
-              as reset, resource-limited child processes with early exit.
+              One submission uses one disposable container. Temporary gateway
+              failures retry the same job instead of losing its verdict.
             </p>
           </div>
 
           {judgeState === "accepted" && (
             <div className="reward-card">
               <span>QUEST CLEARED</span>
-              <strong>+120 XP</strong>
-              <p>Forked Path is now available.</p>
+              <strong>+{quest.xp} XP</strong>
+              <p>
+                {nextQuestTitle
+                  ? `${nextQuestTitle} is now available.`
+                  : "Current campaign frontier reached."}
+              </p>
               <button onClick={onExit}>[ RETURN TO MAP ]</button>
             </div>
           )}
@@ -504,7 +561,7 @@ export function MissionTerminal({
       </div>
 
       <div className="mission-actions">
-        <span>autosave: device-local</span>
+        <span>autosave: device + account progress</span>
         <div>
           <button className="sample-button" onClick={runSample}>
             &gt; RUN SAMPLE

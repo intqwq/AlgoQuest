@@ -31,6 +31,9 @@ only the Judge owns access to the Docker socket.
 - Loads and saves quest progress.
 - Proxies submission creation and polling to the Judge.
 - Records Judge results and marks a quest cleared after `AC`.
+- Retries transient status-link failures without creating a second submission.
+- Falls back to the last durable terminal result if the Judge restarts.
+- Enforces campaign prerequisites before forwarding a submission.
 - Applies the private `JUDGE_API_TOKEN` to every Judge request.
 
 ### Judge
@@ -64,12 +67,14 @@ client.
 | `GET /health` | None | API, database, and Judge readiness |
 | `POST /v1/sessions` | None | Create a player and return an opaque token |
 | `GET /v1/me/progress` | Player bearer token | Load saved progress |
-| `PUT /v1/me/progress/:questId` | Player bearer token | Save progress |
+| `PUT /v1/me/progress/:questId` | Player bearer token | Sync progress backed by an accepted submission |
 | `POST /v1/judge/submissions` | Player bearer token | Queue a Judge job |
 | `GET /v1/judge/submissions/:id` | Player bearer token | Poll an owned job |
 
 The Judge's `/v1/submissions` endpoints require the internal Judge token. The
 Core API also verifies ownership before returning a submission status.
+Temporary Judge or gateway failures are returned as retryable `503` responses;
+the browser keeps polling the same job with bounded exponential backoff.
 
 ## Deployment shapes
 

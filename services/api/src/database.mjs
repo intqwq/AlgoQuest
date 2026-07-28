@@ -106,6 +106,17 @@ export function createDatabase(databaseUrl) {
       );
     },
 
+    async hasAcceptedSubmission(userId, questId) {
+      const result = await pool.query(
+        `SELECT 1
+           FROM submissions
+          WHERE user_id = $1 AND quest_id = $2 AND verdict = 'AC'
+          LIMIT 1`,
+        [userId, questId],
+      );
+      return Boolean(result.rowCount);
+    },
+
     async createSubmission(userId, judgeSubmissionId, questId, status) {
       const id = crypto.randomUUID();
       await pool.query(
@@ -119,7 +130,7 @@ export function createDatabase(databaseUrl) {
 
     async findSubmission(userId, judgeSubmissionId) {
       const result = await pool.query(
-        `SELECT id, quest_id
+        `SELECT id, judge_submission_id, quest_id, status, verdict, details
            FROM submissions
           WHERE user_id = $1 AND judge_submission_id = $2`,
         [userId, judgeSubmissionId],
@@ -127,7 +138,11 @@ export function createDatabase(databaseUrl) {
       if (!result.rowCount) return undefined;
       return {
         id: result.rows[0].id,
+        judgeSubmissionId: result.rows[0].judge_submission_id,
         questId: result.rows[0].quest_id,
+        status: result.rows[0].status,
+        verdict: result.rows[0].verdict,
+        details: result.rows[0].details,
       };
     },
 
