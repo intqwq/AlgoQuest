@@ -6,6 +6,29 @@ import { createOpaqueToken, hashToken } from "./auth.mjs";
 
 const { Pool } = pg;
 
+export function createRateLimitQuery(action, key, windowSeconds) {
+  return {
+    text: `INSERT INTO auth_rate_limits
+             (action, key_hash, window_started_at, attempts)
+           VALUES ($1, $2, now(), 1)
+           ON CONFLICT (action, key_hash) DO UPDATE SET
+             attempts = CASE
+               WHEN auth_rate_limits.window_started_at <
+                    now() - ($3::integer * interval '1 second')
+               THEN 1
+               ELSE auth_rate_limits.attempts + 1
+             END,
+             window_started_at = CASE
+               WHEN auth_rate_limits.window_started_at <
+                    now() - ($3::integer * interval '1 second')
+               THEN now()
+               ELSE auth_rate_limits.window_started_at
+             END
+           RETURNING attempts`,
+    values: [action, hashToken(key), windowSeconds],
+  };
+}
+
 export function createDatabase(databaseUrl) {
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -85,26 +108,8 @@ export function createDatabase(databaseUrl) {
     },
 
     async consumeRateLimit(action, key, limit, windowSeconds) {
-      const result = await pool.query(
-        `INSERT INTO auth_rate_limits
-           (action, key_hash, window_started_at, attempts)
-         VALUES ($1, $2, now(), 1)
-         ON CONFLICT (action, key_hash) DO UPDATE SET
-           attempts = CASE
-             WHEN auth_rate_limits.window_started_at <
-                  now() - ($4 * interval '1 second')
-             THEN 1
-             ELSE auth_rate_limits.attempts + 1
-           END,
-           window_started_at = CASE
-             WHEN auth_rate_limits.window_started_at <
-                  now() - ($4 * interval '1 second')
-             THEN now()
-             ELSE auth_rate_limits.window_started_at
-           END
-         RETURNING attempts`,
-        [action, hashToken(key), limit, windowSeconds],
-      );
+      const query = createRateLimitQuery(action, key, windowSeconds);
+      const result = await pool.query(query.text, query.values);
       return result.rows[0].attempts <= limit;
     },
 
