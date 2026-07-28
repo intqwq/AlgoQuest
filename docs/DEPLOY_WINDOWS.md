@@ -25,7 +25,8 @@ The command:
 2. creates `.env.windows` with random PostgreSQL and Judge secrets;
 3. builds the GNU C++14 runner;
 4. builds and starts Web, API, Judge, and PostgreSQL;
-5. prints the service addresses.
+5. submits a known-correct C++ program to the isolated runner and requires AC;
+6. prints the service addresses.
 
 Open <http://localhost:8080>.
 
@@ -96,6 +97,8 @@ algoquest-judge-cache
 
 - `docker info` fails: start Docker Desktop and wait for the engine.
 - Runner fails immediately: confirm Docker Desktop is using Linux containers.
+- Judge smoke test fails: read the result printed by the script and run
+  `docker compose --env-file .env.windows logs --tail 100 judge`.
 - API health is degraded: inspect `api` logs, then `db` and `judge` health.
 - Web loads but submissions are offline: confirm `/api/v1/sessions` reaches the
   API and that API/Judge `JUDGE_API_TOKEN` values match.
