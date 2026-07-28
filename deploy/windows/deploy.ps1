@@ -87,6 +87,17 @@ try {
         throw "Docker Compose deployment failed."
     }
 
+    if ($Mode -in @("all", "judge")) {
+        Write-Host "Running the isolated Judge smoke test..."
+        & docker compose `
+            --env-file $EnvFile `
+            exec -T judge node scripts/smoke.mjs
+        if ($LASTEXITCODE -ne 0) {
+            & docker compose --env-file $EnvFile logs --tail 100 judge
+            throw "Judge smoke test failed. The deployment is running, but correct C++ was not accepted."
+        }
+    }
+
     & docker compose --env-file $EnvFile ps
     Write-Host ""
     switch ($Mode) {
