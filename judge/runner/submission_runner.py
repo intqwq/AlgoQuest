@@ -5,6 +5,7 @@ import math
 import os
 import resource
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -18,7 +19,9 @@ BINARY_PATH = SUBMISSION_ROOT / "main"
 RUNNER_UID = 10001
 RUNNER_GID = 10001
 MAX_OUTPUT_BYTES = 64 * 1024
-WORK_ROOT = Path("/work")
+WORK_ROOT = Path(os.environ.get("ALGOQUEST_RUNNER_WORK_ROOT", "/work"))
+COMPILE_ROOT = WORK_ROOT / "compile"
+COMPILED_BINARY_PATH = COMPILE_ROOT / "main"
 
 
 def emit(payload):
@@ -71,11 +74,12 @@ def child_limits(memory_bytes=None, time_limit_ms=None, output_limit=False):
 def compile_source(manifest):
     emit({"type": "phase", "phase": "COMPILING", "cacheHit": bool(manifest["cacheHit"])})
     if manifest["cacheHit"] and BINARY_PATH.exists():
-        os.chown(BINARY_PATH, 0, 0)
         os.chmod(BINARY_PATH, 0o555)
         os.chmod(SUBMISSION_ROOT, 0o755)
         return None
 
+    COMPILE_ROOT.mkdir(mode=0o777)
+    os.chmod(COMPILE_ROOT, 0o777)
     compiler_output = WORK_ROOT / "compiler.stderr"
     command = [
         "g++",
@@ -85,7 +89,7 @@ def compile_source(manifest):
         "-Wall",
         "-Wextra",
         "-o",
-        str(BINARY_PATH),
+        str(COMPILED_BINARY_PATH),
         str(SOURCE_PATH),
     ]
     with compiler_output.open("wb") as stderr:
@@ -114,7 +118,7 @@ def compile_source(manifest):
             }
 
     kill_runner_processes()
-    if process.returncode != 0 or not BINARY_PATH.exists():
+    if process.returncode != 0 or not COMPILED_BINARY_PATH.exists():
         return {
             "verdict": "CE",
             "compilerOutput": clamp_text(compiler_output),
@@ -122,7 +126,10 @@ def compile_source(manifest):
             "compiled": False,
         }
 
-    os.chown(BINARY_PATH, 0, 0)
+    # The compiler runs as the unprivileged submission user. Copying the
+    # finished executable from the scratch tmpfs creates a root-owned file
+    # without granting CAP_CHOWN to the container supervisor.
+    shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)
     os.chmod(BINARY_PATH, 0o555)
     os.chmod(SUBMISSION_ROOT, 0o755)
     return None
@@ -140,8 +147,8 @@ def read_metrics(path, fallback_ms):
 
 def run_case(test, manifest):
     case_root = WORK_ROOT / f"case-{test['id']}"
-    case_root.mkdir(mode=0o770)
-    os.chown(case_root, RUNNER_UID, RUNNER_GID)
+    case_root.mkdir(mode=0o777)
+    os.chmod(case_root, 0o777)
     stdout_path = case_root / "stdout"
     stderr_path = case_root / "stderr"
     metrics_path = case_root / "metrics"
