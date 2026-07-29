@@ -29,6 +29,36 @@ export function createRateLimitQuery(action, key, windowSeconds) {
   };
 }
 
+export function createSaveProgressQuery(userId, questId, status, score) {
+  return {
+    text: `INSERT INTO quest_progress
+       (user_id, quest_id, status, best_score, cleared_at, updated_at)
+     VALUES
+       (
+         $1::uuid,
+         $2::varchar(96),
+         $3::varchar(16),
+         $4::integer,
+         CASE
+           WHEN $3::varchar(16) = 'cleared'::varchar(16) THEN now()
+         END,
+         now()
+       )
+     ON CONFLICT (user_id, quest_id) DO UPDATE SET
+       status = CASE
+         WHEN quest_progress.status = 'cleared' THEN 'cleared'
+         ELSE EXCLUDED.status
+       END,
+       best_score = GREATEST(quest_progress.best_score, EXCLUDED.best_score),
+       cleared_at = COALESCE(
+         quest_progress.cleared_at,
+         CASE WHEN EXCLUDED.status = 'cleared' THEN now() END
+       ),
+       updated_at = now()`,
+    values: [userId, questId, status, score],
+  };
+}
+
 export function createDatabase(databaseUrl) {
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -435,24 +465,8 @@ export function createDatabase(databaseUrl) {
     },
 
     async saveProgress(userId, questId, status, score) {
-      await pool.query(
-        `INSERT INTO quest_progress
-           (user_id, quest_id, status, best_score, cleared_at, updated_at)
-         VALUES
-           ($1, $2, $3, $4, CASE WHEN $3 = 'cleared' THEN now() END, now())
-         ON CONFLICT (user_id, quest_id) DO UPDATE SET
-           status = CASE
-             WHEN quest_progress.status = 'cleared' THEN 'cleared'
-             ELSE EXCLUDED.status
-           END,
-           best_score = GREATEST(quest_progress.best_score, EXCLUDED.best_score),
-           cleared_at = COALESCE(
-             quest_progress.cleared_at,
-             CASE WHEN EXCLUDED.status = 'cleared' THEN now() END
-           ),
-           updated_at = now()`,
-        [userId, questId, status, score],
-      );
+      const query = createSaveProgressQuery(userId, questId, status, score);
+      await pool.query(query.text, query.values);
     },
 
     async hasAcceptedSubmission(userId, questId) {
