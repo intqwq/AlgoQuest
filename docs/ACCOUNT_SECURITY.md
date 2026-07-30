@@ -1,10 +1,16 @@
 # Player accounts, Resend, and Turnstile
 
-AlgoQuest supports guest play, account registration, email verification,
-login/logout, player-name changes, forgotten-password email, and single-use
-password reset links. Registering upgrades the current guest in place. Logging
-in to an existing account merges the current guest's quest progress and
-submission history before deleting the guest record.
+AlgoQuest supports account registration, email verification, login/logout,
+player-name changes, forgotten-password email, and single-use password reset
+links. Visitors can read the welcome page, but quests, source editing and the
+Judge require a verified account.
+
+Registering upgrades the temporary registration identity in place. Login never
+silently chooses between a device save and the player database. When both
+contain different data, the player sees clear counts, timestamps and latest
+draft information and must choose local or cloud. Source drafts follow that
+choice; verified Judge history is retained and merged so a prior result is not
+lost.
 
 ## Production configuration
 
@@ -95,4 +101,8 @@ To test real email on Windows, edit `.env.windows`, switch
 - Turnstile is checked server-side; a client-only success is never trusted.
 - Login errors do not reveal whether an email exists.
 - Forgot-password responses are identical for existing and unknown emails.
+- Guests and unverified accounts receive `403` from progress, save, draft and
+  Judge endpoints even if they bypass the browser UI.
+- Local progress can unlock a cloud quest only when PostgreSQL already contains
+  a matching accepted submission.
 - PostgreSQL and Judge remain private; only the Gateway is public.
