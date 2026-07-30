@@ -71,7 +71,7 @@ export const quests: Quest[] = [
     prerequisites: [],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q1",
-    mapPosition: { x: 13, y: 28 },
+    mapPosition: { x: 10, y: 18 },
     description:
       "Wake the dormant relay by reading two energy values and printing their sum.",
     skills: ["cin / cout", "variables", "arithmetic"],
@@ -126,7 +126,7 @@ int main() {
     prerequisites: ["signal-fire"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q2",
-    mapPosition: { x: 34, y: 25 },
+    mapPosition: { x: 30, y: 18 },
     description:
       "Choose the safer tunnel by comparing two danger readings.",
     skills: ["if / else", "comparison"],
@@ -183,7 +183,7 @@ int main() {
     prerequisites: ["forked-path"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q3",
-    mapPosition: { x: 56, y: 30 },
+    mapPosition: { x: 50, y: 18 },
     description: "Repeat the ancient signal until the gate responds.",
     skills: ["for", "while"],
     problem: {
@@ -240,7 +240,7 @@ int main() {
     prerequisites: ["echo-loop"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q4",
-    mapPosition: { x: 27, y: 67 },
+    mapPosition: { x: 20, y: 48 },
     description: "Scan a sequence of memory cells and recover its strongest signal.",
     skills: ["arrays", "traversal"],
     problem: {
@@ -296,7 +296,7 @@ int main() {
     prerequisites: ["array-vault"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q5",
-    mapPosition: { x: 52, y: 66 },
+    mapPosition: { x: 40, y: 48 },
     description: "Restore a shattered archive by returning every rune to ascending order.",
     skills: ["sort", "complexity"],
     problem: {
@@ -355,7 +355,7 @@ int main() {
     prerequisites: ["sorting-ruins"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q6",
-    mapPosition: { x: 76, y: 72 },
+    mapPosition: { x: 60, y: 48 },
     description: "Find one frequency among millions before the gate closes.",
     skills: ["binary search", "invariants"],
     problem: {
@@ -412,7 +412,7 @@ int main() {
     prerequisites: ["binary-gate"],
     chapter: "CH.03 / SIGNAL STRUCTURES",
     gridArea: "q7",
-    mapPosition: { x: 18, y: 88 },
+    mapPosition: { x: 10, y: 80 },
     description: "Answer many energy-range queries without rescanning the array.",
     skills: ["prefix sums", "queries"],
     problem: {
@@ -474,7 +474,7 @@ int main() {
     prerequisites: ["binary-gate"],
     chapter: "CH.03 / SIGNAL STRUCTURES",
     gridArea: "q8",
-    mapPosition: { x: 42, y: 84 },
+    mapPosition: { x: 30, y: 80 },
     description: "Use a stack to verify the sentinel's bracket sequence.",
     skills: ["stack", "matching"],
     problem: {
@@ -536,7 +536,7 @@ int main() {
     prerequisites: ["prefix-beacon", "stack-sentinel"],
     chapter: "CH.04 / EXPLORATION",
     gridArea: "q9",
-    mapPosition: { x: 62, y: 88 },
+    mapPosition: { x: 50, y: 80 },
     description: "Find the shortest safe path through a ruined grid.",
     skills: ["BFS", "grid graph"],
     problem: {
@@ -613,7 +613,7 @@ int main() {
     prerequisites: ["grid-rescue"],
     chapter: "CH.04 / EXPLORATION",
     gridArea: "q10",
-    mapPosition: { x: 82, y: 72 },
+    mapPosition: { x: 70, y: 80 },
     description: "Cross a weighted road network with the least possible cost.",
     skills: ["Dijkstra", "priority queue"],
     problem: {
@@ -689,7 +689,7 @@ int main() {
     prerequisites: ["dijkstra-citadel"],
     chapter: "CH.05 / NETWORKS",
     gridArea: "q11",
-    mapPosition: { x: 69, y: 47 },
+    mapPosition: { x: 84, y: 50 },
     description: "Maintain changing alliances with a disjoint-set union.",
     skills: ["DSU", "path compression"],
     problem: {
@@ -764,7 +764,7 @@ int main() {
     prerequisites: ["union-forge"],
     chapter: "CH.05 / NETWORKS",
     gridArea: "q12",
-    mapPosition: { x: 43, y: 48 },
+    mapPosition: { x: 70, y: 20 },
     description: "Produce the smallest valid order for a dependency graph.",
     skills: ["topological sort", "DAG"],
     problem: {
@@ -836,7 +836,7 @@ int main() {
     prerequisites: [],
     chapter: "SECRET / UNKNOWN",
     gridArea: "secret",
-    mapPosition: { x: 88, y: 28 },
+    mapPosition: { x: 90, y: 18 },
     description: "The wall sounds hollow here. Something waits behind it.",
     skills: ["???"],
   },

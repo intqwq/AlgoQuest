@@ -515,6 +515,20 @@ a {
   cursor: grabbing;
 }
 
+.quest-map-viewport.is-editing {
+  outline: 4px solid var(--pink);
+  outline-offset: -6px;
+}
+
+.quest-map-viewport.is-editing .quest-node {
+  cursor: move;
+  touch-action: none;
+}
+
+.quest-map-viewport.is-editing .quest-hover-card {
+  display: none;
+}
+
 .map-help {
   position: absolute;
   z-index: 30;
@@ -541,6 +555,41 @@ a {
 
 .quest-map-viewport.is-dragging .quest-map-canvas {
   transition: none;
+}
+
+.map-edit-toolbar {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 9px 12px;
+  border: 2px solid var(--ink);
+  background: var(--paper-deep);
+  box-shadow: 4px 4px 0 var(--ink);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.map-edit-toolbar > div {
+  display: flex;
+  gap: 8px;
+}
+
+.map-edit-toolbar button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--ink);
+  color: var(--green);
+  background: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.map-edit-toolbar button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .quest-connections {

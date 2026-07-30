@@ -13,10 +13,16 @@ import {
   Player,
   resolvePlayerSave,
   SaveSubmission,
+  saveQuestMapLayout,
   saveQuestDraft,
   saveQuestProgress,
 } from "@/lib/api-client";
 import { isQuestUnlocked, Quest, quests } from "@/lib/quests";
+import {
+  arrangeQuestPositions,
+  MapPosition,
+  nearestOpenMapPosition,
+} from "@/lib/map-layout";
 import {
   Locale,
   localeOptions,
@@ -143,6 +149,9 @@ export default function Home() {
   const [saveConflict, setSaveConflict] = useState<SaveConflict>();
   const [syncingSave, setSyncingSave] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [mapEditing, setMapEditing] = useState(false);
+  const [mapSaving, setMapSaving] = useState(false);
+  const [mapDraft, setMapDraft] = useState<Record<string, MapPosition>>({});
   const copy = text(locale);
   const displayedQuests = useMemo(
     () => questCatalog.map((quest) => localizeQuest(quest, locale)),
@@ -150,13 +159,24 @@ export default function Home() {
   );
   const selectedDisplay =
     displayedQuests.find((quest) => quest.id === selected.id) ?? selected;
+  const mapQuests = useMemo(
+    () =>
+      mapEditing
+        ? questCatalog.map((quest) => ({
+            ...quest,
+            mapPosition: mapDraft[quest.id] ?? quest.mapPosition,
+          }))
+        : questCatalog,
+    [mapDraft, mapEditing, questCatalog],
+  );
 
   const canPlay = Boolean(
     player && !player.isGuest && player.emailVerified && playerSave,
   );
 
   const refreshQuestCatalog = useCallback(() => {
-    void loadQuestCatalog().then(({ quests: overrides, archivedQuestIds }) => {
+    void loadQuestCatalog().then(
+      ({ quests: overrides, archivedQuestIds, mapLayout }) => {
       const archived = new Set(archivedQuestIds);
       const byId = new Map(overrides.map((quest) => [quest.id, quest]));
       const merged = quests
@@ -172,12 +192,65 @@ export default function Home() {
           (left.sortOrder ?? (Number(left.index) || 9999)) -
           (right.sortOrder ?? (Number(right.index) || 9999)),
       );
-      setQuestCatalog(merged);
-      setSelected((current) =>
-        merged.find((quest) => quest.id === current.id) ?? merged[0] ?? current,
+      const positioned = arrangeQuestPositions(
+        merged.map((quest) => ({
+          ...quest,
+          mapPosition: mapLayout[quest.id] ?? quest.mapPosition,
+        })),
       );
-    });
+      setQuestCatalog(positioned);
+      setSelected((current) =>
+        positioned.find((quest) => quest.id === current.id) ??
+        positioned[0] ??
+        current,
+      );
+      },
+    );
   }, []);
+
+  const startMapEditing = () => {
+    setMapDraft(
+      Object.fromEntries(
+        questCatalog.map((quest) => [quest.id, quest.mapPosition]),
+      ),
+    );
+    setMapEditing(true);
+    setNotice(copy.mapEditHint);
+  };
+
+  const cancelMapEditing = () => {
+    setMapEditing(false);
+    setMapDraft({});
+    setNotice(copy.saveReady);
+  };
+
+  const moveMapQuest = (questId: string, desired: MapPosition) => {
+    setMapDraft((current) => ({
+      ...current,
+      [questId]: nearestOpenMapPosition(questId, desired, current),
+    }));
+  };
+
+  const saveMapEditing = async () => {
+    setMapSaving(true);
+    try {
+      await saveQuestMapLayout(
+        mapQuests.map((quest) => ({
+          id: quest.id,
+          ...quest.mapPosition,
+        })),
+      );
+      setQuestCatalog(mapQuests);
+      setMapEditing(false);
+      setMapDraft({});
+      setNotice(copy.mapSaved);
+      refreshQuestCatalog();
+    } catch {
+      setNotice(copy.mapSaveFailed);
+    } finally {
+      setMapSaving(false);
+    }
+  };
 
   const applySave = useCallback((save: PlayerSave) => {
     persistLocalPlayerSave(save);
@@ -669,6 +742,36 @@ export default function Home() {
           </div>
         </div>
 
+        {(player?.role === "admin" || player?.role === "owner") && (
+          <div className="map-edit-toolbar">
+            <span>
+              {mapEditing ? copy.mapEditHint : "MAP_LAYOUT.cfg // READ ONLY"}
+            </span>
+            {mapEditing ? (
+              <div>
+                <button
+                  type="button"
+                  disabled={mapSaving}
+                  onClick={() => void saveMapEditing()}
+                >
+                  [ {mapSaving ? "SAVING..." : copy.saveMap} ]
+                </button>
+                <button
+                  type="button"
+                  disabled={mapSaving}
+                  onClick={cancelMapEditing}
+                >
+                  [ {copy.cancelMap} ]
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={startMapEditing}>
+                [ {copy.editMap} ]
+              </button>
+            )}
+          </div>
+        )}
+
         <button
           className="playable-banner"
           type="button"
@@ -688,7 +791,7 @@ export default function Home() {
 
         <div className="world-grid">
           <QuestMap
-            questStates={questCatalog.map((quest) => {
+            questStates={mapQuests.map((quest) => {
               const playable = isQuestUnlocked(quest, cleared);
               const completed = cleared.has(quest.id);
               const displayStatus =
@@ -702,7 +805,10 @@ export default function Home() {
               };
             })}
             selectedId={selected.id}
-            copy={copy}
+            copy={{
+              ...copy,
+              dragMap: mapEditing ? copy.mapEditHint : copy.dragMap,
+            }}
             onSelect={(quest) => {
               setSelected(quest);
               setNotice(
@@ -715,6 +821,8 @@ export default function Home() {
               );
             }}
             onOpen={openQuest}
+            editable={mapEditing}
+            onPositionChange={moveMapQuest}
           />
 
           <aside className="quest-brief" id="missions">

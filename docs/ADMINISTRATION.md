@@ -22,6 +22,11 @@ When this value is omitted and no owner exists, the oldest verified non-guest
 account is promoted once. After an owner exists, later accounts are never
 promoted automatically.
 
+The owner assignment is applied when the API starts and is returned by every
+existing session immediately; signing out is not required after changing
+`SITE_OWNER_EMAIL`, but the API container must be recreated by the deployment
+script.
+
 An owner may promote players to admins or return admins to the player role.
 Owners cannot be created, demoted or edited through ordinary admin endpoints.
 
@@ -46,6 +51,10 @@ quest catalog endpoint.
 Archiving is the safe form of removing a quest. It disappears from the player
 map and cannot be submitted, while existing drafts, submissions and progress
 remain available for audit.
+
+Admins and owners can also use **Edit map** above the campaign map. Quest cards
+can be dragged without overlapping; **Save map** persists the layout in
+PostgreSQL for every player. **Cancel** discards the unsaved drag operation.
 
 ## Owner server controls
 

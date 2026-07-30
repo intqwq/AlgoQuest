@@ -46,17 +46,32 @@ export function QuestMap({
   copy,
   onSelect,
   onOpen,
+  editable = false,
+  onPositionChange,
 }: {
   questStates: QuestState[];
   selectedId: string;
   copy: MapCopy;
   onSelect: (quest: Quest) => void;
   onOpen: (quest: Quest) => void;
+  editable?: boolean;
+  onPositionChange?: (
+    questId: string,
+    position: { x: number; y: number },
+  ) => void;
 }) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{
     pointerId: number;
+    x: number;
+    y: number;
+    originX: number;
+    originY: number;
+  } | undefined>(undefined);
+  const nodeDrag = useRef<{
+    pointerId: number;
+    questId: string;
     x: number;
     y: number;
     originX: number;
@@ -118,9 +133,48 @@ export function QuestMap({
     }
   };
 
+  const startNodeDrag = (
+    event: PointerEvent<HTMLButtonElement>,
+    quest: Quest,
+  ) => {
+    if (!editable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    nodeDrag.current = {
+      pointerId: event.pointerId,
+      questId: quest.id,
+      x: event.clientX,
+      y: event.clientY,
+      originX: quest.mapPosition.x,
+      originY: quest.mapPosition.y,
+    };
+  };
+
+  const moveNode = (event: PointerEvent<HTMLButtonElement>) => {
+    const current = nodeDrag.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onPositionChange?.(current.questId, {
+      x: current.originX + ((event.clientX - current.x) / canvas.width) * 100,
+      y: current.originY + ((event.clientY - current.y) / canvas.height) * 100,
+    });
+  };
+
+  const stopNodeDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (nodeDrag.current?.pointerId !== event.pointerId) return;
+    nodeDrag.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   return (
     <div
-      className={`quest-map-viewport ${dragging ? "is-dragging" : ""}`}
+      className={`quest-map-viewport ${dragging ? "is-dragging" : ""} ${
+        editable ? "is-editing" : ""
+      }`}
       aria-label="Quest map"
       style={{ backgroundPosition: `${pan.x}px ${pan.y}px` }}
       onPointerDown={startDrag}
@@ -170,7 +224,13 @@ export function QuestMap({
                 } ${completed ? "is-completed" : ""} ${
                   playable ? "is-playable" : ""
                 }`}
-                onClick={() => onSelect(base)}
+                onPointerDown={(event) => startNodeDrag(event, base)}
+                onPointerMove={moveNode}
+                onPointerUp={stopNodeDrag}
+                onPointerCancel={stopNodeDrag}
+                onClick={() => {
+                  if (!editable) onSelect(base);
+                }}
                 aria-label={`${display.title}, ${displayStatus}`}
               >
                 <span className="node-cap">

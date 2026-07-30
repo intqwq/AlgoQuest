@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createRateLimitQuery,
   createSaveProgressQuery,
+  mapPlayer,
 } from "../src/database.mjs";
 
 test("rate-limit SQL uses a contiguous, explicitly typed parameter list", () => {
@@ -58,4 +59,36 @@ test("admin migration adds protected roles, quest management and server controls
   assert.match(migration, /CREATE TABLE IF NOT EXISTS server_settings/);
   assert.match(migration, /submission_cooldown_seconds integer NOT NULL DEFAULT 5/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS submission_cooldowns/);
+});
+
+test("authenticated player payload retains the database role", () => {
+  assert.deepEqual(
+    mapPlayer({
+      id: "player-id",
+      display_name: "INLINEINT",
+      email: "owner@example.com",
+      email_verified_at: new Date(),
+      is_guest: false,
+      role: "owner",
+    }),
+    {
+      id: "player-id",
+      displayName: "INLINEINT",
+      email: "owner@example.com",
+      emailVerified: true,
+      isGuest: false,
+      role: "owner",
+    },
+  );
+});
+
+test("map layout migration stores durable collision-free coordinates", async () => {
+  const migration = await readFile(
+    new URL("../migrations/005_quest_map_layout.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS quest_map_layout/);
+  assert.match(migration, /quest_id varchar\(96\) PRIMARY KEY/);
+  assert.match(migration, /CHECK \(x BETWEEN 2 AND 98\)/);
+  assert.match(migration, /CHECK \(y BETWEEN 2 AND 98\)/);
 });

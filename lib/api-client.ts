@@ -279,20 +279,26 @@ export async function loadCurrentPlayer(): Promise<Player | undefined> {
 export async function loadQuestCatalog(): Promise<{
   quests: Quest[];
   archivedQuestIds: string[];
+  mapLayout: Record<string, { x: number; y: number }>;
 }> {
   const response = await retryingFetch(apiUrl("/quests"), {
     headers: { accept: "application/json" },
   });
-  if (!response.ok) return { quests: [], archivedQuestIds: [] };
+  if (!response.ok) return { quests: [], archivedQuestIds: [], mapLayout: {} };
   const body = (await response.json()) as {
     quests?: Quest[];
     archivedQuestIds?: string[];
+    mapLayout?: Record<string, { x: number; y: number }>;
   };
   return {
     quests: Array.isArray(body.quests) ? body.quests : [],
     archivedQuestIds: Array.isArray(body.archivedQuestIds)
       ? body.archivedQuestIds
       : [],
+    mapLayout:
+      body.mapLayout && typeof body.mapLayout === "object"
+        ? body.mapLayout
+        : {},
   };
 }
 
@@ -367,6 +373,19 @@ export async function archiveAdminQuest(questId: string) {
     `/admin/quests/${encodeURIComponent(questId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function saveQuestMapLayout(
+  positions: Array<{ id: string; x: number; y: number }>,
+) {
+  const body = await adminJson<{
+    mapLayout: Record<string, { x: number; y: number }>;
+  }>("/admin/quest-map-layout", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ positions }),
+  });
+  return body.mapLayout;
 }
 
 export async function loadServerOverview() {

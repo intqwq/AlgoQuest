@@ -431,7 +431,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/v1/quests") {
-      const records = await database.listQuestRecords({ includeArchived: true });
+      const [records, mapLayout] = await Promise.all([
+        database.listQuestRecords({ includeArchived: true }),
+        database.listQuestMapLayout(),
+      ]);
       return json(response, 200, {
         quests: records
           .filter((record) => !record.archived)
@@ -439,6 +442,7 @@ const server = http.createServer(async (request, response) => {
         archivedQuestIds: records
           .filter((record) => record.archived)
           .map((record) => record.id),
+        mapLayout,
       });
     }
 
@@ -668,6 +672,51 @@ const server = http.createServer(async (request, response) => {
       requireAdmin(player);
       return json(response, 200, {
         quests: await database.listQuestRecords({ includeArchived: true }),
+      });
+    }
+
+    if (
+      request.method === "PUT" &&
+      url.pathname === "/v1/admin/quest-map-layout"
+    ) {
+      requireAdmin(player);
+      const body = await readJson(request, 64 * 1024);
+      if (!Array.isArray(body.positions) || body.positions.length > 128) {
+        throw new ApiError(400, "INVALID_MAP_LAYOUT");
+      }
+      const records = await database.listQuestRecords({ includeArchived: false });
+      const knownQuestIds = new Set([
+        ...Object.keys(questPrerequisites),
+        "nameless-room",
+        ...records.map((record) => record.id),
+      ]);
+      const seen = new Set();
+      const positions = body.positions.map((position) => {
+        const id = boundedText(position?.id, 96);
+        const x = Number(position?.x);
+        const y = Number(position?.y);
+        if (
+          !validQuestId(id) ||
+          !knownQuestIds.has(id) ||
+          seen.has(id) ||
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          x < 2 ||
+          x > 98 ||
+          y < 2 ||
+          y > 98
+        ) {
+          throw new ApiError(400, "INVALID_MAP_LAYOUT");
+        }
+        seen.add(id);
+        return {
+          id,
+          x: Number(x.toFixed(2)),
+          y: Number(y.toFixed(2)),
+        };
+      });
+      return json(response, 200, {
+        mapLayout: await database.updateQuestMapLayout(positions, player.id),
       });
     }
 
@@ -1068,7 +1117,14 @@ const server = http.createServer(async (request, response) => {
 });
 
 await migrateWithRetry(database);
-await database.ensureSiteOwner(siteOwnerEmail);
+const bootstrappedOwner = await database.ensureSiteOwner(siteOwnerEmail);
+if (siteOwnerEmail && !bootstrappedOwner) {
+  console.warn(
+    "SITE_OWNER_EMAIL does not match a verified, non-guest AlgoQuest account.",
+  );
+} else if (bootstrappedOwner) {
+  console.log("Site owner role is active.");
+}
 server.listen(port, "0.0.0.0", () => {
   console.log(`AlgoQuest API listening on :${port}`);
 });

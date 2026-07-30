@@ -130,13 +130,7 @@ export function createDatabase(databaseUrl) {
         [hashToken(token)],
       );
       if (!result.rowCount) return undefined;
-      return {
-        id: result.rows[0].id,
-        displayName: result.rows[0].display_name,
-        email: result.rows[0].email,
-        emailVerified: Boolean(result.rows[0].email_verified_at),
-        isGuest: result.rows[0].is_guest,
-      };
+      return mapPlayer(result.rows[0]);
     },
 
     async consumeRateLimit(action, key, limit, windowSeconds) {
@@ -898,6 +892,47 @@ export function createDatabase(databaseUrl) {
       return Boolean(result.rowCount);
     },
 
+    async listQuestMapLayout() {
+      const result = await pool.query(
+        `SELECT quest_id, x, y
+           FROM quest_map_layout
+          ORDER BY quest_id`,
+      );
+      return Object.fromEntries(
+        result.rows.map((row) => [
+          row.quest_id,
+          { x: Number(row.x), y: Number(row.y) },
+        ]),
+      );
+    },
+
+    async updateQuestMapLayout(positions, actorId) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const position of positions) {
+          await client.query(
+            `INSERT INTO quest_map_layout
+               (quest_id, x, y, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, now())
+             ON CONFLICT (quest_id) DO UPDATE SET
+               x = EXCLUDED.x,
+               y = EXCLUDED.y,
+               updated_by = EXCLUDED.updated_by,
+               updated_at = now()`,
+            [position.id, position.x, position.y, actorId],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      return this.listQuestMapLayout();
+    },
+
     async getServerSettings() {
       const result = await pool.query(
         `SELECT
@@ -1042,7 +1077,7 @@ function mapQuestRecord(row) {
   };
 }
 
-function mapPlayer(row) {
+export function mapPlayer(row) {
   return {
     id: row.id,
     displayName: row.display_name,
