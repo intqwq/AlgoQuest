@@ -25,6 +25,27 @@ type AuthView =
   | "profile"
   | "verify_pending";
 
+type TurnstileState =
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "verified" }
+  | { status: "expired" }
+  | { status: "timeout" }
+  | { status: "unsupported" }
+  | { status: "error"; code: string };
+
+type TurnstileLabels = {
+  loading: string;
+  ready: string;
+  verified: string;
+  expired: string;
+  timeout: string;
+  unsupported: string;
+  error: string;
+  retry: string;
+  errorCode: string;
+};
+
 type TurnstileApi = {
   render(
     target: HTMLElement,
@@ -32,9 +53,17 @@ type TurnstileApi = {
       sitekey: string;
       action: string;
       theme: "light";
+      size: "flexible";
+      appearance: "always";
+      retry: "auto";
+      "retry-interval": number;
+      "refresh-expired": "auto";
+      "refresh-timeout": "auto";
       callback: (token: string) => void;
       "expired-callback": () => void;
-      "error-callback": () => void;
+      "timeout-callback": () => void;
+      "unsupported-callback": () => void;
+      "error-callback": (errorCode: string) => boolean;
     },
   ): string;
   reset(widgetId: string): void;
@@ -47,30 +76,73 @@ declare global {
   }
 }
 
+const TURNSTILE_SCRIPT_SELECTOR =
+  'script[data-algoquest-turnstile="true"]';
+const TURNSTILE_SCRIPT_URL =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+const TURNSTILE_LOAD_TIMEOUT_MS = 12_000;
+
+class TurnstileLoadError extends Error {
+  constructor(public code: string) {
+    super(code);
+  }
+}
+
 let turnstileLoader: Promise<void> | undefined;
+
+function clearFailedTurnstileScript() {
+  turnstileLoader = undefined;
+  if (window.turnstile) return;
+  document
+    .querySelectorAll<HTMLScriptElement>(TURNSTILE_SCRIPT_SELECTOR)
+    .forEach((script) => script.remove());
+}
 
 function loadTurnstileScript() {
   if (window.turnstile) return Promise.resolve();
-  turnstileLoader ??= new Promise<void>((resolve, reject) => {
+  if (turnstileLoader) return turnstileLoader;
+
+  turnstileLoader = new Promise<void>((resolve, reject) => {
+    let settled = false;
     const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-algoquest-turnstile="true"]',
+      TURNSTILE_SCRIPT_SELECTOR,
     );
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("load failed")), {
-        once: true,
-      });
-      return;
+    const script = existing ?? document.createElement("script");
+    const finish = (error?: TurnstileLoadError) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      script.removeEventListener("load", handleLoad);
+      script.removeEventListener("error", handleError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const handleLoad = () => {
+      if (window.turnstile) finish();
+      else finish(new TurnstileLoadError("API_UNAVAILABLE"));
+    };
+    const handleError = () =>
+      finish(new TurnstileLoadError("SCRIPT_LOAD_FAILED"));
+    const timeoutId = window.setTimeout(
+      () => finish(new TurnstileLoadError("SCRIPT_TIMEOUT")),
+      TURNSTILE_LOAD_TIMEOUT_MS,
+    );
+
+    script.addEventListener("load", handleLoad, { once: true });
+    script.addEventListener("error", handleError, { once: true });
+    if (!existing) {
+      script.src = TURNSTILE_SCRIPT_URL;
+      script.defer = true;
+      script.dataset.algoquestTurnstile = "true";
+      document.head.appendChild(script);
+    } else if (window.turnstile) {
+      finish();
     }
-    const script = document.createElement("script");
-    script.src =
-      "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    script.defer = true;
-    script.dataset.algoquestTurnstile = "true";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("load failed"));
-    document.head.appendChild(script);
+  }).catch((error) => {
+    clearFailedTurnstileScript();
+    throw error;
   });
+
   return turnstileLoader;
 }
 
@@ -79,40 +151,129 @@ function TurnstileBox({
   action,
   resetKey,
   onToken,
+  labels,
 }: {
   siteKey: string;
   action: string;
   resetKey: number;
   onToken: (token: string) => void;
+  labels: Readonly<TurnstileLabels>;
 }) {
   const targetRef = useRef<HTMLDivElement>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<TurnstileState>({ status: "loading" });
 
   useEffect(() => {
     let active = true;
     let widgetId: string | undefined;
     onToken("");
+    queueMicrotask(() => {
+      if (active) setState({ status: "loading" });
+    });
     void loadTurnstileScript()
       .then(() => {
-        if (!active || !targetRef.current || !window.turnstile) return;
+        if (!active || !targetRef.current || !window.turnstile) {
+          throw new TurnstileLoadError("API_UNAVAILABLE");
+        }
+        setState({ status: "ready" });
         widgetId = window.turnstile.render(targetRef.current, {
           sitekey: siteKey,
           action,
           theme: "light",
-          callback: onToken,
-          "expired-callback": () => onToken(""),
-          "error-callback": () => onToken(""),
+          size: "flexible",
+          appearance: "always",
+          retry: "auto",
+          "retry-interval": 8_000,
+          "refresh-expired": "auto",
+          "refresh-timeout": "auto",
+          callback: (token) => {
+            if (!active) return;
+            onToken(token);
+            setState({ status: "verified" });
+          },
+          "expired-callback": () => {
+            if (!active) return;
+            onToken("");
+            setState({ status: "expired" });
+          },
+          "timeout-callback": () => {
+            if (!active) return;
+            onToken("");
+            setState({ status: "timeout" });
+          },
+          "unsupported-callback": () => {
+            if (!active) return;
+            onToken("");
+            setState({ status: "unsupported" });
+          },
+          "error-callback": (errorCode) => {
+            if (!active) return false;
+            onToken("");
+            setState({ status: "error", code: String(errorCode) });
+            return false;
+          },
         });
       })
-      .catch(() => onToken(""));
+      .catch((error) => {
+        if (!active) return;
+        onToken("");
+        setState({
+          status: "error",
+          code:
+            error instanceof TurnstileLoadError
+              ? error.code
+              : "WIDGET_RENDER_FAILED",
+        });
+      });
     return () => {
       active = false;
       if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
     };
-  }, [action, onToken, resetKey, siteKey]);
+  }, [action, attempt, onToken, resetKey, siteKey]);
+
+  const retryable = ["error", "expired", "timeout", "unsupported"].includes(
+    state.status,
+  );
+  const statusText =
+    state.status === "loading"
+      ? labels.loading
+      : state.status === "ready"
+        ? labels.ready
+        : state.status === "verified"
+          ? labels.verified
+          : state.status === "expired"
+            ? labels.expired
+            : state.status === "timeout"
+              ? labels.timeout
+              : state.status === "unsupported"
+                ? labels.unsupported
+                : labels.error;
 
   return (
-    <div className="turnstile-frame">
+    <div className={`turnstile-frame turnstile-frame--${state.status}`}>
       <div ref={targetRef} />
+      <div className="turnstile-status" aria-live="polite">
+        <span>
+          {statusText}
+          {state.status === "error" && (
+            <code>
+              {labels.errorCode}: {state.code}
+            </code>
+          )}
+        </span>
+        {retryable && (
+          <button
+            type="button"
+            onClick={() => {
+              onToken("");
+              clearFailedTurnstileScript();
+              setAttempt((value) => value + 1);
+            }}
+          >
+            [ {labels.retry} ]
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -132,6 +293,7 @@ const errorMessages: Record<Locale, Record<string, string>> = {
     INVALID_OR_EXPIRED_TOKEN: "This link is invalid, expired, or already used.",
     RATE_LIMITED: "Too many attempts. Pause before trying again.",
     REGISTRATION_DISABLED: "New player registration is temporarily disabled.",
+    AUTH_CONFIG_UNAVAILABLE: "Account security configuration is unavailable. Retry the connection.",
   },
   "zh-CN": {
     INVALID_EMAIL: "请输入有效的邮箱地址。",
@@ -147,6 +309,7 @@ const errorMessages: Record<Locale, Record<string, string>> = {
     INVALID_OR_EXPIRED_TOKEN: "链接无效、已过期或已经使用。",
     RATE_LIMITED: "尝试次数过多，请稍后再试。",
     REGISTRATION_DISABLED: "新玩家注册暂时关闭。",
+    AUTH_CONFIG_UNAVAILABLE: "账号安全配置暂时不可用，请重试连接。",
   },
   ja: {
     INVALID_EMAIL: "有効なメールアドレスを入力してください。",
@@ -162,6 +325,7 @@ const errorMessages: Record<Locale, Record<string, string>> = {
     INVALID_OR_EXPIRED_TOKEN: "リンクが無効、期限切れ、または使用済みです。",
     RATE_LIMITED: "試行回数が多すぎます。しばらくお待ちください。",
     REGISTRATION_DISABLED: "新規登録は一時停止中です。",
+    AUTH_CONFIG_UNAVAILABLE: "アカウント保護設定を取得できません。接続を再試行してください。",
   },
 };
 
@@ -197,6 +361,20 @@ const accountMessages = {
     adminRole: "ADMIN",
     ownerRole: "SITE OWNER",
     controlDeck: "CONTROL DECK",
+    securityConfigLoading: "LOADING SECURITY CONFIGURATION...",
+    securityConfigUnavailable: "SECURITY CONFIGURATION OFFLINE",
+    retrySecurityConfig: "RETRY CONFIG",
+    turnstile: {
+      loading: "LOADING SECURITY CHECK...",
+      ready: "COMPLETE THE SECURITY CHECK",
+      verified: "SECURITY CHECK COMPLETE",
+      expired: "SECURITY TOKEN EXPIRED",
+      timeout: "SECURITY CHECK TIMED OUT",
+      unsupported: "THIS BROWSER IS NOT SUPPORTED",
+      error: "SECURITY CHECK ERROR",
+      retry: "RETRY CHECK",
+      errorCode: "CODE",
+    },
   },
   "zh-CN": {
     loginRegister: "登录 / 注册",
@@ -229,6 +407,20 @@ const accountMessages = {
     adminRole: "管理员",
     ownerRole: "站长",
     controlDeck: "管理控制台",
+    securityConfigLoading: "正在加载安全配置……",
+    securityConfigUnavailable: "安全配置连接失败",
+    retrySecurityConfig: "重试配置",
+    turnstile: {
+      loading: "正在加载安全验证……",
+      ready: "请完成安全验证",
+      verified: "安全验证已完成",
+      expired: "安全验证令牌已过期",
+      timeout: "安全验证已超时",
+      unsupported: "当前浏览器不受支持",
+      error: "安全验证发生错误",
+      retry: "重试验证",
+      errorCode: "错误码",
+    },
   },
   ja: {
     loginRegister: "ログイン / 登録",
@@ -261,6 +453,20 @@ const accountMessages = {
     adminRole: "管理者",
     ownerRole: "サイトオーナー",
     controlDeck: "管理コンソール",
+    securityConfigLoading: "セキュリティ設定を読み込み中…",
+    securityConfigUnavailable: "セキュリティ設定に接続できません",
+    retrySecurityConfig: "設定を再試行",
+    turnstile: {
+      loading: "セキュリティ確認を読み込み中…",
+      ready: "セキュリティ確認を完了してください",
+      verified: "セキュリティ確認が完了しました",
+      expired: "セキュリティトークンの期限が切れました",
+      timeout: "セキュリティ確認がタイムアウトしました",
+      unsupported: "このブラウザはサポートされていません",
+      error: "セキュリティ確認エラー",
+      retry: "確認を再試行",
+      errorCode: "コード",
+    },
   },
 } as const;
 
@@ -291,6 +497,8 @@ export function AccountPanel({
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<AuthView>("login");
   const [config, setConfig] = useState<AuthConfig>();
+  const [configError, setConfigError] = useState("");
+  const [configRetryKey, setConfigRetryKey] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -331,6 +539,7 @@ export function AccountPanel({
             : "login",
       );
       setMessage("");
+      setConfigError("");
       setTurnstileToken("");
       setResetKey((value) => value + 1);
       setOpen(true);
@@ -342,10 +551,21 @@ export function AccountPanel({
 
   useEffect(() => {
     if (!open) return;
+    let active = true;
     void loadAuthConfig()
-      .then(setConfig)
-      .catch((error) => setMessage(messageFor(error, locale)));
-  }, [locale, open]);
+      .then((nextConfig) => {
+        if (!active) return;
+        setConfig(nextConfig);
+        setConfigError("");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setConfigError(messageFor(error, locale));
+      });
+    return () => {
+      active = false;
+    };
+  }, [configRetryKey, locale, open]);
 
   useEffect(() => {
     if (linkHandledRef.current) return;
@@ -594,12 +814,36 @@ export function AccountPanel({
                     </label>
                   )}
 
+                  {needsTurnstile && !config?.turnstileSiteKey && (
+                    <div className="account-security-status" aria-live="polite">
+                      <span>
+                        {configError
+                          ? copy.securityConfigUnavailable
+                          : copy.securityConfigLoading}
+                        {configError && <small>{configError}</small>}
+                      </span>
+                      {configError && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConfig(undefined);
+                            setConfigError("");
+                            setConfigRetryKey((value) => value + 1);
+                          }}
+                        >
+                          [ {copy.retrySecurityConfig} ]
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {needsTurnstile && config?.turnstileSiteKey && (
                     <TurnstileBox
                       siteKey={config.turnstileSiteKey}
                       action={action}
                       resetKey={resetKey}
                       onToken={setTurnstileToken}
+                      labels={copy.turnstile}
                     />
                   )}
 

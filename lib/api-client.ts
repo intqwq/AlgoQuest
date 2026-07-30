@@ -168,16 +168,26 @@ async function retryingFetch(
   attempts = 3,
 ) {
   let response: Response | undefined;
+  let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    response = await fetch(input, init);
-    if (!transientApiStatuses.has(response.status) || attempt === attempts - 1) {
-      return response;
+    try {
+      response = await fetch(input, init);
+      if (
+        !transientApiStatuses.has(response.status) ||
+        attempt === attempts - 1
+      ) {
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts - 1) throw error;
     }
     await new Promise((resolve) =>
       window.setTimeout(resolve, 300 * 2 ** attempt),
     );
   }
-  return response!;
+  if (response) return response;
+  throw lastError ?? new Error("API request failed.");
 }
 
 export function apiUrl(path: string) {
@@ -275,11 +285,18 @@ async function authPost(
 }
 
 export async function loadAuthConfig(): Promise<AuthConfig> {
-  const response = await fetch(apiUrl("/auth/config"), {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) throw new Error("Account security configuration is offline.");
-  return response.json() as Promise<AuthConfig>;
+  try {
+    const response = await retryingFetch(apiUrl("/auth/config"), {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new AuthApiError("AUTH_CONFIG_UNAVAILABLE", response.status);
+    }
+    return response.json() as Promise<AuthConfig>;
+  } catch (error) {
+    if (error instanceof AuthApiError) throw error;
+    throw new AuthApiError("AUTH_CONFIG_UNAVAILABLE", 0);
+  }
 }
 
 export async function loadCurrentPlayer(): Promise<Player | undefined> {

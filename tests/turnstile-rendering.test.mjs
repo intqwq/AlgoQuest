@@ -34,6 +34,32 @@ test("root layout preloads the official explicit-render Turnstile API", async ()
   assert.match(layout, /data-algoquest-turnstile="true"/);
 });
 
+
+test("Turnstile reports lifecycle errors and offers bounded recovery", async () => {
+  const [account, client, css] = await Promise.all([
+    readFile(new URL("../components/account-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/api-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/turnstile-fix.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(account, /TURNSTILE_LOAD_TIMEOUT_MS = 12_000/);
+  assert.match(account, /SCRIPT_TIMEOUT/);
+  assert.match(account, /SCRIPT_LOAD_FAILED/);
+  assert.match(account, /"error-callback": \(errorCode\)/);
+  assert.match(account, /"timeout-callback"/);
+  assert.match(account, /"unsupported-callback"/);
+  assert.match(account, /retry: "auto"/);
+  assert.match(account, /"retry-interval": 8_000/);
+  assert.match(account, /"refresh-expired": "auto"/);
+  assert.match(account, /clearFailedTurnstileScript\(\)/);
+  assert.match(account, /state\.code/);
+  assert.match(account, /retrySecurityConfig/);
+  assert.match(client, /retryingFetch\(apiUrl\("\/auth\/config"\)/);
+  assert.match(client, /AUTH_CONFIG_UNAVAILABLE/);
+  assert.match(css, /\.turnstile-status/);
+  assert.match(css, /\.account-security-status/);
+});
+
 test("gateway re-resolves recreated Docker services", async () => {
   const nginx = await readFile(
     new URL("../deploy/nginx/default.conf.template", import.meta.url),

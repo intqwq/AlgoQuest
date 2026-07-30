@@ -27,3 +27,67 @@
     animation: none !important;
   }
 }
+
+.turnstile-status,
+.account-security-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed #918f87;
+  background: #efebe2;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.5;
+}
+
+.turnstile-status span,
+.account-security-status span,
+.account-security-status small,
+.turnstile-status code {
+  display: block;
+}
+
+.turnstile-status code,
+.account-security-status small {
+  margin-top: 3px;
+  color: #686761;
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+
+.turnstile-status button,
+.account-security-status button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--ink);
+  color: var(--paper);
+  background: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.turnstile-frame--verified .turnstile-status {
+  border-color: var(--green-dark);
+  background: #dce8de;
+}
+
+.turnstile-frame--error .turnstile-status,
+.turnstile-frame--expired .turnstile-status,
+.turnstile-frame--timeout .turnstile-status,
+.turnstile-frame--unsupported .turnstile-status,
+.account-security-status {
+  border-color: var(--amber);
+  background: #f4e7c9;
+}
+
+@media (max-width: 520px) {
+  .turnstile-status,
+  .account-security-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -106,3 +106,18 @@ To test real email on Windows, edit `.env.windows`, switch
 - Local progress can unlock a cloud quest only when PostgreSQL already contains
   a matching accepted submission.
 - PostgreSQL and Judge remain private; only the Gateway is public.
+
+## Browser recovery behavior
+
+The account panel distinguishes Core API configuration failure from Turnstile
+widget failure. Loading `/v1/auth/config` uses three bounded attempts for network
+errors and transient `429`, `502`, `503`, or `504` responses. A persistent
+failure displays a dedicated **Retry config** action instead of leaving the form
+silently disabled.
+
+The Turnstile script has a 12-second load deadline. The widget reports loading,
+ready, verified, expired, interactive timeout, unsupported-browser, and error
+states. Cloudflare error codes are shown to the player, transient widget errors
+retain Turnstile's automatic retry, and a manual **Retry check** action rebuilds
+the widget. Tokens are cleared after expiry, timeout, error, view changes, and
+every account request.
