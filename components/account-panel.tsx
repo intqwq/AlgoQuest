@@ -181,6 +181,28 @@ export function AccountPanel({
   };
 
   useEffect(() => {
+    const openAccount = (event: Event) => {
+      const requested = (event as CustomEvent<{ view?: AuthView }>).detail?.view;
+      setView(
+        requested === "register"
+          ? "register"
+          : player && !player.isGuest
+            ? player.emailVerified
+              ? "profile"
+              : "verify_pending"
+            : "login",
+      );
+      setMessage("");
+      setTurnstileToken("");
+      setResetKey((value) => value + 1);
+      setOpen(true);
+    };
+    window.addEventListener("algoquest:open-account", openAccount);
+    return () =>
+      window.removeEventListener("algoquest:open-account", openAccount);
+  }, [player]);
+
+  useEffect(() => {
     if (!open) return;
     void loadAuthConfig()
       .then(setConfig)
@@ -246,7 +268,7 @@ export function AccountPanel({
         onPlayerChange(nextPlayer);
         onAccountSync();
         setView("profile");
-        setMessage("LOGIN ACCEPTED // GUEST SAVE MERGED");
+        setMessage("LOGIN ACCEPTED // SAVE CHECK STARTED");
       } else if (view === "forgot") {
         await requestPasswordReset({
           email: String(form.get("email") ?? ""),
@@ -310,11 +332,10 @@ export function AccountPanel({
         }}
         aria-label="Open player account"
       >
-        <span className="online-dot" />
-        {(player?.displayName ?? "PLAYER").toUpperCase()}
-        {" // LV."}
-        {String(level).padStart(2, "0")}
-        {player?.isGuest ? " // GUEST" : ""}
+        <span className={`online-dot ${player ? "" : "is-offline"}`} />
+        {player && !player.isGuest
+          ? `${player.displayName.toUpperCase()} // LV.${String(level).padStart(2, "0")}`
+          : "LOGIN / REGISTER"}
       </button>
 
       {open && (
