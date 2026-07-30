@@ -1,0 +1,25 @@
+name: Inspect reliability patch
+
+on:
+  push:
+    branches:
+      - agent/judge-turnstile-reliability
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and print relevant sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .reliability-patch/part-* | base64 --decode > /tmp/reliability-patch.tgz
+          tar -xzf /tmp/reliability-patch.tgz
+          echo '===== supervisor comparisons ====='
+          grep -n -C 12 -E 'WA|received|expected|normalize|compare' judge/runner/submission_runner.py || true
+          echo '===== security Docker test ====='
+          sed -n '70,140p' judge/test/docker.integration.test.mjs
