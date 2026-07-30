@@ -191,8 +191,8 @@ jobs:
                   '  cout << (exposed ? "LEAK" : "SAFE")',
                   '  if (manifestExposed) return 7;\n'
                   '  if (commandExposed) for (;;) {}\n'
-                  '  if (stdinExposed) { for (int i = 0; i < 200000; ++i) cout << "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n"; }\n'
-                  '  if (writeExposed) { vector<char> memory(256ULL * 1024 * 1024); for (size_t i = 0; i < memory.size(); i += 4096) memory[i] = 1; }\n'
+                  '  if (stdinExposed) { vector<char> memory(256ULL * 1024 * 1024); for (size_t i = 0; i < memory.size(); i += 4096) memory[i] = 1; }\n'
+                  '  if (writeExposed) { for (int i = 0; i < 200000; ++i) cout << "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; }\n'
                   '  cout << "SAFE"',
               ),
           ]
