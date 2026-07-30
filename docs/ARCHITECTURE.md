@@ -1,135 +1,380 @@
 # AlgoQuest service architecture
 
-## Runtime boundary
+This document describes the runtime and trust boundaries implemented by the
+current AlgoQuest codebase. Endpoint-level request and response details live in
+[API.md](API.md).
+
+## Runtime topology
 
 ```mermaid
 flowchart TD
-    B["Browser"] -->|HTTPS| G["Gateway + Web"]
-    G -->|"/api/v1"| A["Core API"]
+    B["Browser"] -->|HTTPS| G["Gateway / Nginx"]
+    G -->|page and assets| W["Web / Vinext + React"]
+    G -->|/api/*| A["Core API"]
     A -->|SQL| D[("PostgreSQL")]
-    A -->|Private REST| J["Judge API"]
-    J -->|Docker socket| R["Disposable runner"]
-    A -->|Token validation| T["Cloudflare Turnstile"]
-    A -->|Verification mail| E["Resend"]
+    A -->|private REST + bearer token| J["Judge API"]
+    J -->|Docker socket| R["Disposable C++14 runner"]
+    A -->|server-side verification| T["Cloudflare Turnstile"]
+    A -->|transactional email| E["Resend"]
 ```
 
-The public boundary ends at the Gateway. Only the Core API owns user data, and
-only the Judge owns access to the Docker socket.
+The public boundary ends at the Gateway. The Web application contains only
+public configuration and browser code. The Core API owns identity, authorization,
+content policy, saves, and database access. The Judge owns queueing and Docker
+execution.
+
+## Design principles
+
+1. **One public origin.** Nginx serves the Web application and proxies `/api/*`
+   to the Core API, avoiding cross-origin browser configuration in the normal
+   deployment.
+2. **Single data owner.** PostgreSQL is not exposed as an application API. Only
+   the Core API reads or writes player and platform data.
+3. **Single execution owner.** Only the Judge service can access the Docker
+   socket. The Core API sends validated jobs over a private HTTP contract.
+4. **Server-authoritative progression.** A quest can be marked cleared only when
+   the account has a persisted submission whose accepted score meets the quest's
+   pass threshold.
+5. **Public and secret quest data are separated.** Browsers receive statements,
+   limits, and map metadata. Hidden tests stay in PostgreSQL or the Judge image
+   and are forwarded only across the private API boundary.
+6. **Roles are enforced in the Core API.** UI visibility is convenience, not an
+   authorization control.
 
 ## Services
 
-### Gateway and Web
+### Gateway
 
-- Serves the Vinext/React application.
-- Shows only the welcome/introduction surface until a verified account is
-  active and its save choice is resolved.
-- Uses a self-hosted Monaco editor for C++ drafts; Monaco is lazy-loaded only
-  after a mission opens.
-- Proxies `/api/*` to the Core API so a single-machine deployment is
-  same-origin.
-- Does not contain database credentials or the Judge token.
-- Bakes `NEXT_PUBLIC_API_BASE_URL` into the browser bundle at image-build time.
+The `gateway` service is an Nginx container that:
+
+- listens on the deployment's public port;
+- proxies page and asset requests to `web`;
+- proxies `/api/*` to `api`;
+- keeps the browser on one origin;
+- reads upstream locations from `WEB_UPSTREAM` and `API_UPSTREAM`;
+- runs with a read-only filesystem, tmpfs runtime directories, and
+  `no-new-privileges`.
+
+The gateway owns no application secrets. Split-host deployments can point its API
+upstream at an internal hostname, Tailnet address, or protected tunnel.
+
+### Web
+
+The `web` service builds and serves the Vinext/React application. It contains:
+
+- the ASCII-art world and responsive quest map;
+- seven built-in C++14 missions;
+- support for merging database-backed quest overrides and custom quests;
+- administrator-editable map positions with collision-aware placement;
+- a lazy-loaded, self-hosted Monaco mission editor;
+- sample and full submission workflows;
+- local draft persistence and cloud save reconciliation;
+- account, editorial, administration, and owner interfaces;
+- the searchable algorithm Codex;
+- English, Simplified Chinese, and Japanese copy.
+
+`NEXT_PUBLIC_API_BASE_URL` is compiled into the browser bundle. Its default is
+`/api/v1`, which Nginx maps to the Core API's `/v1` namespace.
+
+The Web service never receives `DATABASE_URL`, `JUDGE_API_TOKEN`, Resend secrets,
+or the Turnstile secret key.
 
 ### Core API
 
-- Creates short-lived guest identities only as part of registration.
-- Upgrades guests into email/password accounts after verification.
-- Rejects progress and Judge calls from guests or unverified accounts.
-- Returns local/cloud save metadata and waits for an explicit conflict choice.
-- Stores the latest source draft for every started quest.
-- Sends verification and password-reset mail through Resend.
-- Validates Turnstile tokens, action, and hostname on the server.
-- Applies persistent per-IP and per-email authentication limits.
-- Hashes passwords with salted `scrypt`.
-- Stores only SHA-256 hashes of session tokens.
-- Loads and saves quest progress.
-- Proxies submission creation and polling to the Judge.
-- Records every Judge result together with its exact source snapshot and marks
-  a quest cleared after `AC`.
-- Retries transient status-link failures without creating a second submission.
-- Falls back to the last durable terminal result if the Judge restarts.
-- Enforces campaign prerequisites before forwarding a submission.
-- Applies the private `JUDGE_API_TOKEN` to every Judge request.
+The Core API is a Node.js HTTP service on port `8787`. It is responsible for:
+
+#### Identity and account security
+
+- creating rate-limited guest sessions;
+- upgrading a guest or creating a new email/password account;
+- email verification and password reset through expiring opaque tokens;
+- validating Turnstile token, action, remote address, and optional hostname;
+- hashing passwords with salted `scrypt`;
+- storing only SHA-256 hashes of bearer session tokens;
+- revoking the current session on logout and all old sessions on password reset;
+- bootstrapping and protecting the site owner role.
+
+#### Player state
+
+- loading the current player and role;
+- updating display names;
+- storing progress and best score;
+- storing the latest source draft for each quest;
+- retaining source-bearing submission history;
+- resolving local versus cloud save conflicts explicitly;
+- transferring or discarding legacy guest data only after the player chooses.
+
+#### Quest and editorial policy
+
+- returning database-backed quest definitions, archived IDs, and map overrides;
+- enforcing prerequisite completion before a submission is forwarded;
+- allowing administrators to create, replace, archive, and position quests;
+- keeping hidden tests out of public quest responses;
+- allowing discussions after any submission;
+- allowing player solutions only after a clear;
+- publishing discussions immediately;
+- sending player solutions to moderation;
+- allowing administrators and owners to publish directly.
+
+#### Judge orchestration
+
+- applying the server-wide Judge switch and persisted per-account cooldown;
+- attaching the private Judge token;
+- attaching a trusted dynamic quest definition when needed;
+- persisting the exact source snapshot before results are considered durable;
+- polling only submissions owned by the authenticated player;
+- updating progress after a passing terminal result;
+- serving the last durable terminal result when the Judge status link is
+  temporarily unavailable.
+
+#### Administration
+
+- user search and account updates;
+- quest catalog management;
+- map layout management;
+- editorial moderation;
+- owner-only server settings, statistics, runtime information, and Judge health.
 
 ### Judge
 
-- Owns the bounded in-memory queue.
-- Allows one in-flight submission per player and applies a cooldown.
-- Creates one Docker container per submission.
-- Compiles once, runs cases sequentially with early stop, and returns
-  `CE/WA/RE/TLE/MLE/OLE/AC`.
-- Never receives database credentials.
+The Judge is a Node.js HTTP service on port `8788`. Its API is private except for
+`GET /health`.
+
+It owns:
+
+- a bounded in-memory submission queue;
+- configurable worker concurrency;
+- one active submission per request owner;
+- an in-memory result TTL;
+- validation of language, mode, source size, and quest existence;
+- built-in hidden tests plus token-authenticated trusted dynamic quest tests;
+- one disposable Docker container per submission;
+- a bounded compile cache keyed by source and compiler configuration;
+- verdict and score calculation.
+
+Supported language and verdicts:
+
+```text
+Language: cpp14
+Verdicts: AC, CE, WA, RE, TLE, MLE, OLE, JE
+```
+
+`sample` mode runs the first test only and requires a score of 100. `submit` mode
+runs the complete test set until the first non-accepted case or terminal failure.
+
+### Runner container
+
+The Judge starts one runner container for each submission. The container:
+
+- has no network;
+- uses a read-only root filesystem;
+- drops all capabilities, then restores only the minimal capabilities needed by
+  the runner to manage the unprivileged child process;
+- enables `no-new-privileges`;
+- limits PIDs, CPU, memory, swap, open files, output, and wall-clock duration;
+- uses bounded tmpfs workspaces;
+- compiles once with the C++14 toolchain and runs cases sequentially;
+- emits a bounded line-oriented JSON protocol back to the Judge;
+- is forcibly removed after completion or timeout.
+
+The container is a strong process boundary, but it shares the host kernel. A
+public Judge should run on a dedicated and replaceable machine.
 
 ### PostgreSQL
 
-The migrations create:
+PostgreSQL is the durable source of truth. Migrations are loaded in filename order
+at API startup and are written to be safely repeatable.
 
 | Table | Purpose |
 |---|---|
-| `users` | Guest and authenticated player identities |
+| `users` | Guest and verified identities, role, password hash, account timestamps |
 | `sessions` | Hashed bearer tokens and expiry |
-| `quest_progress` | Clear state and best score |
-| `submissions` | User-owned Judge job and verdict history |
-| `quest_drafts` | Latest cloud source draft for each started quest |
-| `account_tokens` | Hashed, expiring email verification and reset tokens |
-| `auth_rate_limits` | Persistent abuse counters by hashed IP/email key |
+| `quest_progress` | Started/cleared state, best score, clear timestamp |
+| `submissions` | User-owned Judge jobs, exact source, verdict, score, result details |
+| `quest_drafts` | Latest cloud source draft for each user and quest |
+| `account_tokens` | Hashed email-verification and password-reset tokens |
+| `auth_rate_limits` | Persistent counters keyed by hashed IP or email |
+| `quest_catalog` | Public quest definition, private Judge definition, archive state, audit actor |
+| `quest_map_layout` | Administrator-controlled quest coordinates |
+| `server_settings` | Registration switch, Judge switch, maintenance text, cooldown |
+| `submission_cooldowns` | Durable last-submission timestamp per user |
+| `editorial_posts` | Discussions, solutions, moderation state, authors, moderators |
 
-PostgreSQL is not an HTTP service. The phrase “database service” means an
-independently deployable database with the Core API as its only application
-client.
+The Core API is the only application service with database credentials.
 
-## HTTP contract
+## Authorization model
 
-| Method and path | Auth | Purpose |
-|---|---|---|
-| `GET /health` | None | API, database, and Judge readiness |
-| `POST /v1/sessions` | None | Create a player and return an opaque token |
-| `GET /v1/auth/config` | None | Return the public Turnstile site key |
-| `POST /v1/auth/register` | Guest optional + Turnstile | Upgrade/create an account and send verification |
-| `POST /v1/auth/verify-email` | Email token | Verify email and create a session |
-| `POST /v1/auth/login` | Guest optional + Turnstile | Login without silently choosing a save |
-| `POST /v1/auth/logout` | Player bearer token | Revoke the current session |
-| `POST /v1/auth/forgot-password` | Turnstile | Send a generic reset response |
-| `POST /v1/auth/reset-password` | Reset token + Turnstile | Replace password and revoke old sessions |
-| `GET /v1/me` | Player bearer token | Load the current player record |
-| `PUT /v1/me/profile` | Player bearer token | Update the display name |
-| `GET /v1/me/progress` | Verified account | Load saved progress |
-| `PUT /v1/me/progress/:questId` | Verified account | Sync progress backed by an accepted submission |
-| `GET /v1/me/save` | Verified account | Load progress, drafts and source-bearing submission history |
-| `PUT /v1/me/drafts/:questId` | Verified account | Autosave the current source draft |
-| `POST /v1/me/save/resolve` | Verified account | Choose local or cloud drafts and finish legacy guest transfer |
-| `POST /v1/judge/submissions` | Verified account | Queue a Judge job |
-| `GET /v1/judge/submissions/:id` | Verified account | Poll an owned job |
+### Guest
 
-The Judge's `/v1/submissions` endpoints require the internal Judge token. The
-Core API also verifies ownership before returning a submission status.
-Temporary Judge or gateway failures are returned as retryable `503` responses;
-the browser keeps polling the same job with bounded exponential backoff.
+A guest has an opaque session and an identity row, but cannot play, save to the
+cloud, post editorial content, or submit to the Judge. Guest state exists to
+support account upgrade and explicit save transfer.
+
+### Player
+
+A playable account must be non-guest and email-verified. A player can:
+
+- load and update their own profile and save;
+- submit only for existing and unlocked quests;
+- poll only their own Judge jobs;
+- create discussions after any submission for the quest;
+- create solutions after clearing the quest.
+
+### Administrator
+
+An administrator can additionally:
+
+- list and update non-owner accounts within role scope;
+- manage database-backed quests and built-in quest overrides;
+- archive quests;
+- edit the world-map layout;
+- view all editorial moderation states;
+- publish or reject posts;
+- publish discussions and solutions directly.
+
+An administrator cannot modify the owner account or create another owner.
+
+### Owner
+
+The owner has all administrator capabilities and can:
+
+- promote or demote administrators;
+- read server statistics and runtime information;
+- enable or disable registration and Judge submissions;
+- set the maintenance message and submission cooldown.
+
+Owner selection is bootstrapped by `SITE_OWNER_EMAIL` when it matches a verified
+account. If there is no configured or existing owner, the earliest verified
+account is selected.
+
+## Main request flows
+
+### Registration
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as Core API
+    participant T as Turnstile
+    participant D as PostgreSQL
+    participant E as Resend
+
+    B->>A: POST /v1/sessions
+    A->>D: create guest + hashed session
+    A-->>B: sessionToken + player
+    B->>A: POST /v1/auth/register
+    A->>T: validate token and action
+    A->>D: upgrade guest or create account
+    A->>D: store hashed verification token
+    A->>E: send verification link
+    A-->>B: 202 VERIFICATION_SENT
+    B->>A: POST /v1/auth/verify-email
+    A->>D: consume token and create session
+    A-->>B: verified player + new sessionToken
+```
+
+### Submission
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as Core API
+    participant D as PostgreSQL
+    participant J as Judge
+    participant R as Runner
+
+    B->>A: POST /v1/judge/submissions
+    A->>D: authorize account, quest, prerequisites, cooldown
+    A->>J: POST /v1/submissions + private token
+    J->>J: reserve queue slot
+    J-->>A: 202 QUEUED + submission ID
+    A->>D: persist owned submission and source
+    A-->>B: 202 submission
+    J->>R: start disposable container
+    R-->>J: progress and terminal result
+    B->>A: GET /v1/judge/submissions/:id
+    A->>D: verify ownership
+    A->>J: GET /v1/submissions/:id
+    J-->>A: result
+    A->>D: persist result and clear quest when score passes
+    A-->>B: submission state
+```
+
+### Editorial publishing
+
+```text
+Discussion by player:
+  requires at least one submission -> published
+
+Solution by player:
+  requires cleared quest -> pending -> administrator/owner moderation
+
+Discussion or solution by administrator/owner:
+  published immediately
+```
+
+## HTTP boundaries
+
+The browser-facing gateway base is normally:
+
+```text
+/api/v1
+```
+
+The Core API listens directly on:
+
+```text
+/v1
+```
+
+The private Judge listens on:
+
+```text
+/v1/submissions
+```
+
+All authenticated Core API requests use:
+
+```http
+Authorization: Bearer <opaque-session-token>
+```
+
+All private Judge requests use:
+
+```http
+Authorization: Bearer <JUDGE_API_TOKEN>
+```
+
+The API reference is maintained in [API.md](API.md).
 
 ## Deployment shapes
 
-### Windows single-machine test
-
-All services share the Compose network:
+### Windows single-machine development
 
 ```text
-Browser -> localhost:8080 -> gateway -> api -> judge
-                                      \-> postgres
+Browser -> localhost:8080 -> gateway -> web
+                                   \-> api -> judge
+                                           \-> postgres
 ```
 
-Only the Gateway is intended for normal browser access. The loopback API,
-Judge, and database ports remain available for diagnostics.
+API, Judge, and database host ports bind to loopback by default for diagnostics.
+Only the Gateway is intended for ordinary browser access.
 
-### Raspberry Pi single-machine production
+### Raspberry Pi single-machine deployment
 
-The same images run on ARM64. Port 80 is the origin for Nginx, cpolar, or
-Cloudflare Tunnel. Persistent data lives in named Docker volumes, which avoids
-SD-card-relative bind paths and works with the Judge's sibling runner
-containers.
+The same images run on ARM64. Port `80` is the expected origin for Nginx, cpolar,
+or Cloudflare Tunnel. PostgreSQL, Judge work files, and the compile cache use named
+Docker volumes so sibling runner containers can access the required job data.
 
-### Split machines
+### Split hosts
 
-Run a profile on each host and set explicit addresses:
+Each Compose profile can run independently:
+
+```text
+web | api | judge | database | all
+```
+
+Typical configuration:
 
 ```text
 Web host:
@@ -143,15 +388,39 @@ Judge host:
   JUDGE_BIND_ADDRESS=0.0.0.0
 ```
 
-`JUDGE_API_TOKEN` must match on API and Judge. If PostgreSQL crosses machines,
-use TLS and a dedicated database user. Prefer a LAN or VPN/Tailnet and firewall
-the API, Judge, and database ports to exact peer addresses.
+`JUDGE_API_TOKEN` must match on API and Judge. If PostgreSQL crosses hosts, use TLS
+and a dedicated database user. Restrict API, Judge, and database ports to exact
+peer addresses through a firewall, private LAN, VPN, or Tailnet.
 
-Resend and Turnstile are outbound HTTPS dependencies of the Core API. Their
-secret credentials never enter the Web image or browser bundle.
+## Failure behavior
+
+- Core health returns `503` with component status when PostgreSQL or Judge is
+  unavailable.
+- Registration and login use persistent rate limits and return `429` when the
+  window is exhausted.
+- Turnstile outages return a retryable `503`; invalid challenges return `400`.
+- Judge queue saturation returns `503`; cooldown returns `429` plus `Retry-After`.
+- Browser polling retries transient `429`, `502`, `503`, and `504` responses with
+  bounded exponential backoff.
+- When Judge polling fails, the Core API returns a persisted terminal result when
+  one exists. Nonterminal jobs return a retryable status instead of inventing a
+  result.
+- Restarting the Judge loses queued/running jobs and in-memory status entries.
+  Results already stored in PostgreSQL remain durable.
 
 ## Scaling path
 
-The current queue is deliberately local and simple. The next scale milestone is
-Redis-backed durable jobs plus multiple Judge workers. The API boundary already
-allows that replacement without changing the Web client or PostgreSQL schema.
+The current deployment deliberately favors a simple self-hosted topology. The
+main scale limit is the Judge's local queue and memory-resident result store.
+
+A production scale-out path is:
+
+1. replace the local queue with Redis or another durable broker;
+2. run multiple stateless Judge workers;
+3. store job state outside worker memory;
+4. place the Core API and workers on private authenticated networks;
+5. move public untrusted execution onto dedicated worker hosts;
+6. add metrics, structured logs, backup policy, and database migration tracking.
+
+The browser and Core API contracts do not require the queue implementation to
+remain local, so this change can be made behind the existing Judge boundary.
