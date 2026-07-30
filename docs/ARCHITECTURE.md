@@ -21,6 +21,10 @@ only the Judge owns access to the Docker socket.
 ### Gateway and Web
 
 - Serves the Vinext/React application.
+- Shows only the welcome/introduction surface until a verified account is
+  active and its save choice is resolved.
+- Uses a self-hosted Monaco editor for C++ drafts; Monaco is lazy-loaded only
+  after a mission opens.
 - Proxies `/api/*` to the Core API so a single-machine deployment is
   same-origin.
 - Does not contain database credentials or the Judge token.
@@ -28,9 +32,11 @@ only the Judge owns access to the Docker socket.
 
 ### Core API
 
-- Creates opaque 90-day anonymous sessions.
-- Upgrades guests into email/password accounts without losing progress.
-- Merges guest data when a player logs in to an existing account.
+- Creates short-lived guest identities only as part of registration.
+- Upgrades guests into email/password accounts after verification.
+- Rejects progress and Judge calls from guests or unverified accounts.
+- Returns local/cloud save metadata and waits for an explicit conflict choice.
+- Stores the latest source draft for every started quest.
 - Sends verification and password-reset mail through Resend.
 - Validates Turnstile tokens, action, and hostname on the server.
 - Applies persistent per-IP and per-email authentication limits.
@@ -38,7 +44,8 @@ only the Judge owns access to the Docker socket.
 - Stores only SHA-256 hashes of session tokens.
 - Loads and saves quest progress.
 - Proxies submission creation and polling to the Judge.
-- Records Judge results and marks a quest cleared after `AC`.
+- Records every Judge result together with its exact source snapshot and marks
+  a quest cleared after `AC`.
 - Retries transient status-link failures without creating a second submission.
 - Falls back to the last durable terminal result if the Judge restarts.
 - Enforces campaign prerequisites before forwarding a submission.
@@ -63,6 +70,7 @@ The migrations create:
 | `sessions` | Hashed bearer tokens and expiry |
 | `quest_progress` | Clear state and best score |
 | `submissions` | User-owned Judge job and verdict history |
+| `quest_drafts` | Latest cloud source draft for each started quest |
 | `account_tokens` | Hashed, expiring email verification and reset tokens |
 | `auth_rate_limits` | Persistent abuse counters by hashed IP/email key |
 
@@ -79,16 +87,19 @@ client.
 | `GET /v1/auth/config` | None | Return the public Turnstile site key |
 | `POST /v1/auth/register` | Guest optional + Turnstile | Upgrade/create an account and send verification |
 | `POST /v1/auth/verify-email` | Email token | Verify email and create a session |
-| `POST /v1/auth/login` | Guest optional + Turnstile | Login and merge guest progress |
+| `POST /v1/auth/login` | Guest optional + Turnstile | Login without silently choosing a save |
 | `POST /v1/auth/logout` | Player bearer token | Revoke the current session |
 | `POST /v1/auth/forgot-password` | Turnstile | Send a generic reset response |
 | `POST /v1/auth/reset-password` | Reset token + Turnstile | Replace password and revoke old sessions |
 | `GET /v1/me` | Player bearer token | Load the current player record |
 | `PUT /v1/me/profile` | Player bearer token | Update the display name |
-| `GET /v1/me/progress` | Player bearer token | Load saved progress |
-| `PUT /v1/me/progress/:questId` | Player bearer token | Sync progress backed by an accepted submission |
-| `POST /v1/judge/submissions` | Player bearer token | Queue a Judge job |
-| `GET /v1/judge/submissions/:id` | Player bearer token | Poll an owned job |
+| `GET /v1/me/progress` | Verified account | Load saved progress |
+| `PUT /v1/me/progress/:questId` | Verified account | Sync progress backed by an accepted submission |
+| `GET /v1/me/save` | Verified account | Load progress, drafts and source-bearing submission history |
+| `PUT /v1/me/drafts/:questId` | Verified account | Autosave the current source draft |
+| `POST /v1/me/save/resolve` | Verified account | Choose local or cloud drafts and finish legacy guest transfer |
+| `POST /v1/judge/submissions` | Verified account | Queue a Judge job |
+| `GET /v1/judge/submissions/:id` | Verified account | Poll an owned job |
 
 The Judge's `/v1/submissions` endpoints require the internal Judge token. The
 Core API also verifies ownership before returning a submission status.
