@@ -31,8 +31,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .reliability-final/chunk-* | base64 --decode > /tmp/reliability-final.tgz
-          echo '37d3297d7129580f155b3bf76f02ccb02a035f04a7fc1169351d240fa9f3af7a  /tmp/reliability-final.tgz' | sha256sum --check
+          declare -A expected=(
+            [chunk-00]=89663ce00ef88281f3ac06cfeceb8491be523795
+            [chunk-01]=e33f1836f712e3abe0aa37a90941ad43299356ce
+            [chunk-02]=8890fd9b1672fbfaa997f51e1efeaa8a51c55bc9
+            [chunk-03]=b439531d8e02c480ce0196698b59514915314578
+            [chunk-04]=48fcd311987995934fc101001b41335a06c2576f
+            [chunk-05]=f5d8d0be8fad7721886b6546d41d0b9acfbdee83
+            [chunk-06]=dcb2db1b1126dcc8502c2841db3532e5312a1ef9
+            [chunk-07]=c2d6cf7e7dd6c3a6155e6f1f60bc4e3fe7dd6886
+            [chunk-08]=fec8f690f836c8729ad10f173c037b17685d2d8a
+          )
+          for name in "${!expected[@]}"; do
+            file=".reliability-final/$name"
+            actual="$(git hash-object "$file")"
+            printf '%s %s bytes %s\n' "$name" "$(wc -c < "$file")" "$actual"
+            test "$actual" = "${expected[$name]}"
+          done
+          python - <<'PY'
+          from base64 import b64decode
+          from pathlib import Path
+          import hashlib
+
+          encoded = b''.join(
+              path.read_bytes()
+              for path in sorted(Path('.reliability-final').glob('chunk-*'))
+          )
+          archive = b64decode(encoded, validate=True)
+          Path('/tmp/reliability-final.tgz').write_bytes(archive)
+          digest = hashlib.sha256(archive).hexdigest()
+          expected = '37d3297d7129580f155b3bf76f02ccb02a035f04a7fc1169351d240fa9f3af7a'
+          if digest != expected:
+              raise SystemExit(f'archive checksum mismatch: {digest}')
+          PY
           tar -xzf /tmp/reliability-final.tgz
 
       - name: Install web dependencies
