@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -58,9 +59,8 @@ apply_replacements(
             '    "{{.State.OOMKilled}}",\n'
             '  ]);\n'
             '  if (finalResult?.compiled && !manifest.cacheHit) {\n'
-            '    // The compiled binary stays in the private /work tmpfs while contestant\n'
-            '    // code runs. Export it only after the container has stopped, so no writable\n'
-            '    // host path is ever visible to submitted code. Cache export is optional.\n'
+            '    // The binary remains in the private /work tmpfs while contestant code runs.\n'
+            '    // Export it only after the container stops; no writable host path is exposed.\n'
             '    await docker([\n'
             '      "cp",\n'
             '      `${name}:/work/compile/main`,\n'
@@ -88,9 +88,8 @@ apply_replacements(
             '    sys.stdin.close()\n',
             '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
             '    sys.stdin.close()\n'
-            '    # Keep fd 0 occupied by /dev/null. Otherwise subprocess pipe creation can\n'
-            '    # reuse descriptor 0, allowing contestant code to read hidden case input\n'
-            '    # through /proc/1/fd/0.\n'
+            '    # Keep fd 0 occupied by /dev/null. Otherwise a later subprocess pipe may\n'
+            '    # reuse it and expose hidden case input through /proc/1/fd/0.\n'
             '    devnull_fd = os.open(os.devnull, os.O_RDONLY)\n'
             '    if devnull_fd != 0:\n'
             '        os.dup2(devnull_fd, 0)\n'
@@ -102,8 +101,8 @@ apply_replacements(
             '        os.chmod(SUBMISSION_ROOT, 0o755)\n'
             '        return None\n',
             '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
-            '        # The host materializes cached binaries before the container starts.\n'
-            '        # Do not mutate the read-only contestant mount.\n'
+            '        # Cached binaries are prepared by the host before the container starts.\n'
+            '        # Never mutate the read-only contestant mount.\n'
             '        return None\n',
         ),
         (
@@ -114,8 +113,8 @@ apply_replacements(
             '    os.chmod(BINARY_PATH, 0o555)\n'
             '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
             '    return None\n',
-            '    # Keep the compiler-owned executable inside the isolated /work tmpfs.\n'
-            '    # The Judge exports a cache candidate only after the container stops.\n'
+            '    # Keep fresh binaries in the isolated /work tmpfs. The host exports an\n'
+            '    # optional cache candidate only after the container has stopped.\n'
             '    return None\n',
         ),
         (
@@ -131,17 +130,6 @@ apply_replacements(
             '        emit({"type": "result", **compile_failure, "containerStarts": 1})\n'
             '        return\n',
         ),
-        (
-            '    if verdict == "RE":\n'
-            '        result["stderr"] = stderr\n'
-            '    return result\n',
-            '    if verdict == "RE":\n'
-            '        result["stderr"] = stderr\n'
-            '    if verdict == "WA":\n'
-            '        result["debugStdout"] = stdout[:4096]\n'
-            '        result["debugExpected"] = test["expected"][:4096]\n'
-            '    return result\n',
-        ),
     ],
 )
 
@@ -151,23 +139,24 @@ apply_replacements(
         (
             '  bool exposed = ifstream("/submission/manifest.json").good();\n'
             '  ifstream commandLine',
-            '  bool manifestExposed = ifstream("/submission/manifest.json").good();\n'
-            '  bool writeExposed = ofstream("/submission/contestant-write-probe").good();\n'
-            '  bool commandExposed = false;\n'
+            '  bool exposed = ifstream("/submission/manifest.json").good();\n'
+            '  exposed = exposed || ofstream("/submission/contestant-write-probe").good();\n'
             '  ifstream commandLine',
-        ),
-        (
-            '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) exposed = true;',
-            '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) commandExposed = true;',
-        ),
-        (
-            '  if (supervisorInput.get(byte)) exposed = true;',
-            '  bool stdinExposed = static_cast<bool>(supervisorInput.get(byte));',
-        ),
-        (
-            '  cout << (exposed ? "LEAK" : "SAFE")',
-            '  if (!manifestExposed && !commandExposed && !stdinExposed && !writeExposed) cout << "SAFE";\n'
-            '  else cout << "M" << manifestExposed << "C" << commandExposed << "F" << stdinExposed << "W" << writeExposed',
         ),
     ],
 )
+
+# The staged archive was generated with a line-continuation escape in this one
+# fixture. Normalize it so the expected value is exactly SAFE, not SAFE plus a
+# literal backslash. The canary remains inside the in-memory manifest.
+test_path = Path("judge/test/docker.integration.test.mjs")
+test_text = test_path.read_text(encoding="utf-8")
+test_text, substitutions = re.subn(
+    r'input: "PRIVATE_INPUT_CANARY[^"]*", expected: "SAFE[^"]*"',
+    'input: "PRIVATE_INPUT_CANARY", expected: "SAFE"',
+    test_text,
+    count=1,
+)
+if substitutions != 1:
+    raise SystemExit("Could not normalize the Judge security fixture")
+test_path.write_text(test_text, encoding="utf-8")
