@@ -40,7 +40,9 @@ The self-hosted runtime is split into independently deployable services:
 The browser never receives database credentials, the Judge token, or hidden test
 cases. Only the Judge service owns Docker-socket access. Trusted test manifests
 are delivered to the runner supervisor over stdin and are never written into the
-contestant-visible submission mount.
+contestant-visible submission mount. The Core API validates Turnstile with a
+bounded timeout, reuses one idempotency key across transient retries, and returns
+stable machine-readable failure reasons without exposing the secret key.
 
 See [Architecture](docs/ARCHITECTURE.md), [HTTP API](docs/API.md), and
 [administration](docs/ADMINISTRATION.md).

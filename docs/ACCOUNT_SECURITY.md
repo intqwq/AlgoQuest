@@ -57,8 +57,11 @@ TURNSTILE_EXPECTED_HOSTNAME=game.intqwq.com
 
 The browser receives only the site key. The Core API keeps the secret and calls
 Cloudflare's Siteverify endpoint for every registration, login, verification
-resend, forgot-password, and password-reset request. It also verifies the
-Turnstile action and configured hostname.
+resend, forgot-password, and password-reset request. It verifies the action and
+configured hostname, applies a four-second deadline to each attempt, and retries
+only transient transport/provider failures up to three times with one
+idempotency key. Expired/duplicate tokens and policy mismatches are never retried
+with the same token.
 
 ### 3. Deploy
 
