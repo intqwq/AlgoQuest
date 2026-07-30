@@ -1,0 +1,173 @@
+from pathlib import Path
+
+
+def apply_replacements(path: str, replacements: list[tuple[str, str]]) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    for old, new in replacements:
+        if old not in text:
+            raise SystemExit(f"Patch anchor not found in {path}: {old[:80]!r}")
+        text = text.replace(old, new, 1)
+    target.write_text(text, encoding="utf-8")
+
+
+apply_replacements(
+    "judge/src/docker-runner.mjs",
+    [
+        (
+            '      "run",\n      "--name",',
+            '      "run",\n      "--interactive",\n      "--name",',
+        ),
+        (
+            '  const runnerJobDir = WORK_VOLUME\n'
+            '    ? `/judge-data/jobs/${path.basename(jobDir)}`\n'
+            '    : "/submission";\n'
+            '  const jobMount = WORK_VOLUME\n'
+            '    ? `type=volume,src=${WORK_VOLUME},dst=/judge-data`\n'
+            '    : `type=bind,src=${jobDir},dst=/submission`;\n',
+            '  let hostJobDir = jobDir;\n'
+            '  if (WORK_VOLUME) {\n'
+            '    const volumeInspection = await docker([\n'
+            '      "volume",\n'
+            '      "inspect",\n'
+            '      WORK_VOLUME,\n'
+            '      "--format",\n'
+            '      "{{.Mountpoint}}",\n'
+            '    ]);\n'
+            '    const mountpoint = volumeInspection.stdout.trim();\n'
+            '    if (volumeInspection.code !== 0 || !mountpoint) {\n'
+            '      throw new Error(`Cannot resolve Judge work volume ${WORK_VOLUME}`);\n'
+            '    }\n'
+            '    hostJobDir = path.join(mountpoint, "jobs", path.basename(jobDir));\n'
+            '  }\n'
+            '  const runnerJobDir = "/submission";\n'
+            '  const jobMount = `type=bind,src=${hostJobDir},dst=/submission,readonly`;\n',
+        ),
+        (
+            '  const inspection = await docker([\n'
+            '    "inspect",\n'
+            '    name,\n'
+            '    "--format",\n'
+            '    "{{.State.OOMKilled}}",\n'
+            '  ]);\n'
+            '  await forceRemove(name);\n',
+            '  const inspection = await docker([\n'
+            '    "inspect",\n'
+            '    name,\n'
+            '    "--format",\n'
+            '    "{{.State.OOMKilled}}",\n'
+            '  ]);\n'
+            '  if (finalResult?.compiled && !manifest.cacheHit) {\n'
+            '    // The compiled binary stays in the private /work tmpfs while contestant\n'
+            '    // code runs. Export it only after the container has stopped, so no writable\n'
+            '    // host path is ever visible to submitted code. Cache export is optional.\n'
+            '    await docker([\n'
+            '      "cp",\n'
+            '      `${name}:/work/compile/main`,\n'
+            '      path.join(hostJobDir, "main"),\n'
+            '    ]);\n'
+            '  }\n'
+            '  await forceRemove(name);\n',
+        ),
+        (
+            '  await chmod(jobDir, 0o755);\n'
+            '  await writeFile(sourcePath, source, { mode: 0o644 });\n'
+            '  if (cacheHit) {',
+            '  await chmod(jobDir, 0o755);\n'
+            '  await writeFile(sourcePath, source, { mode: 0o444 });\n'
+            '  if (cacheHit) {',
+        ),
+    ],
+)
+
+apply_replacements(
+    "judge/runner/submission_runner.py",
+    [
+        (
+            '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
+            '    sys.stdin.close()\n',
+            '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
+            '    sys.stdin.close()\n'
+            '    # Keep fd 0 occupied by /dev/null. Otherwise subprocess pipe creation can\n'
+            '    # reuse descriptor 0, allowing contestant code to read hidden case input\n'
+            '    # through /proc/1/fd/0.\n'
+            '    devnull_fd = os.open(os.devnull, os.O_RDONLY)\n'
+            '    if devnull_fd != 0:\n'
+            '        os.dup2(devnull_fd, 0)\n'
+            '        os.close(devnull_fd)\n',
+        ),
+        (
+            '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
+            '        os.chmod(BINARY_PATH, 0o555)\n'
+            '        os.chmod(SUBMISSION_ROOT, 0o755)\n'
+            '        return None\n',
+            '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
+            '        # The host materializes cached binaries before the container starts.\n'
+            '        # Do not mutate the read-only contestant mount.\n'
+            '        return None\n',
+        ),
+        (
+            '    # The compiler runs as the unprivileged submission user. Copying the\n'
+            '    # finished executable from the scratch tmpfs creates a root-owned file\n'
+            '    # without granting CAP_CHOWN to the container supervisor.\n'
+            '    shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)\n'
+            '    os.chmod(BINARY_PATH, 0o555)\n'
+            '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
+            '    return None\n',
+            '    # Keep the compiler-owned executable inside the isolated /work tmpfs.\n'
+            '    # The Judge exports a cache candidate only after the container stops.\n'
+            '    return None\n',
+        ),
+        (
+            '        str(BINARY_PATH),\n    ]\n    memory_bytes',
+            '        str(BINARY_PATH if manifest["cacheHit"] else COMPILED_BINARY_PATH),\n'
+            '    ]\n    memory_bytes',
+        ),
+        (
+            '    if compile_failure is not None:\n'
+            '        emit({"type": "result", **compile_failure})\n'
+            '        return\n',
+            '    if compile_failure is not None:\n'
+            '        emit({"type": "result", **compile_failure, "containerStarts": 1})\n'
+            '        return\n',
+        ),
+        (
+            '    if verdict == "RE":\n'
+            '        result["stderr"] = stderr\n'
+            '    return result\n',
+            '    if verdict == "RE":\n'
+            '        result["stderr"] = stderr\n'
+            '    if verdict == "WA":\n'
+            '        result["debugStdout"] = stdout[:4096]\n'
+            '        result["debugExpected"] = test["expected"][:4096]\n'
+            '    return result\n',
+        ),
+    ],
+)
+
+apply_replacements(
+    "judge/test/docker.integration.test.mjs",
+    [
+        (
+            '  bool exposed = ifstream("/submission/manifest.json").good();\n'
+            '  ifstream commandLine',
+            '  bool manifestExposed = ifstream("/submission/manifest.json").good();\n'
+            '  bool writeExposed = ofstream("/submission/contestant-write-probe").good();\n'
+            '  bool commandExposed = false;\n'
+            '  ifstream commandLine',
+        ),
+        (
+            '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) exposed = true;',
+            '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) commandExposed = true;',
+        ),
+        (
+            '  if (supervisorInput.get(byte)) exposed = true;',
+            '  bool stdinExposed = static_cast<bool>(supervisorInput.get(byte));',
+        ),
+        (
+            '  cout << (exposed ? "LEAK" : "SAFE")',
+            '  if (!manifestExposed && !commandExposed && !stdinExposed && !writeExposed) cout << "SAFE";\n'
+            '  else cout << "M" << manifestExposed << "C" << commandExposed << "F" << stdinExposed << "W" << writeExposed',
+        ),
+    ],
+)
