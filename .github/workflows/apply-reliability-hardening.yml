@@ -124,6 +124,16 @@ jobs:
           supervisor.write_text(text, encoding='utf-8')
           PY
 
+      - name: Dump staged reliability sources
+        shell: bash
+        run: |
+          printf '%s\n' '===== judge/test/docker.integration.test.mjs ====='
+          sed -n '1,240p' judge/test/docker.integration.test.mjs
+          printf '%s\n' '===== judge/src/docker-runner.mjs ====='
+          sed -n '1,420p' judge/src/docker-runner.mjs
+          printf '%s\n' '===== judge/runner/submission_runner.py ====='
+          sed -n '1,420p' judge/runner/submission_runner.py
+
       - name: Install web dependencies
         run: npm ci
 
