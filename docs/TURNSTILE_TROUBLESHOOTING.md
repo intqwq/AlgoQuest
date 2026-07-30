@@ -16,6 +16,27 @@ Open this URL through the same hostname used for the website:
 
 `turnstileSiteKey` must be non-empty. The site key is public; the secret key must remain only in the API environment.
 
+If the page reports `Account security configuration is offline` and the gateway log contains `connect() failed (111: Connection refused) while connecting to upstream`, Turnstile has not been reached yet. The gateway cannot reach the Core API.
+
+Older gateway configurations resolved Docker service names only when Nginx started. Recreating the API container could therefore leave Nginx pointing at its previous container IP. Restart both services once after updating:
+
+```powershell
+docker compose --env-file .env.windows --profile all up -d --build --force-recreate api gateway
+```
+
+```bash
+docker compose --env-file .env.pi --profile all up -d --build --force-recreate api gateway
+```
+
+Then verify:
+
+```text
+http://localhost:8787/health
+http://localhost:8080/api/v1/auth/config
+```
+
+The gateway template now uses Docker's embedded DNS resolver so later API or Web container replacements are re-resolved automatically.
+
 ## Local Windows deployment
 
 When opening `http://localhost:8080`, use Cloudflare's official test key pair:
