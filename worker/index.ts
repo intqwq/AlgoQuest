@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 
 interface Env {
   ASSETS: Fetcher;
+  ALGOQUEST_API_ORIGIN?: string;
   DB: D1Database;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -28,6 +29,34 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/v1" || url.pathname.startsWith("/api/v1/")) {
+      const apiOrigin =
+        env.ALGOQUEST_API_ORIGIN ?? "https://game.intqwq.com";
+      const upstreamUrl = new URL(`${url.pathname}${url.search}`, apiOrigin);
+      const headers = new Headers(request.headers);
+      headers.delete("host");
+      headers.set("x-forwarded-host", url.host);
+      headers.set("x-forwarded-proto", url.protocol.slice(0, -1));
+      try {
+        return await fetch(
+          new Request(upstreamUrl, {
+            method: request.method,
+            headers,
+            body:
+              request.method === "GET" || request.method === "HEAD"
+                ? undefined
+                : request.body,
+            redirect: "manual",
+          }),
+        );
+      } catch {
+        return Response.json(
+          { error: "PLAYER_API_UNAVAILABLE" },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        );
+      }
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

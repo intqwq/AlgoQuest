@@ -22,7 +22,26 @@ if (result.verdict !== "AC") {
   console.error(JSON.stringify(result, null, 2));
   process.exitCode = 1;
 } else {
+  const wrong = await judgeCpp14(
+    source.replace("a + b", "a - b"),
+    quests["signal-fire"],
+  );
+  if (
+    wrong.verdict !== "WA" ||
+    wrong.cases.length !== quests["signal-fire"].tests.length ||
+    wrong.cases.some(
+      (item) => "expected" in item || "received" in item,
+    )
+  ) {
+    console.error("[judge smoke] WA privacy/full-run contract failed:");
+    console.error(JSON.stringify(wrong, null, 2));
+    process.exitCode = 1;
+  }
+  const peakMemoryKb = Math.max(
+    0,
+    ...result.cases.map((item) => item.memoryKb),
+  );
   console.log(
-    `[judge smoke] AC (${result.cases.length} cases, ${result.containerStarts} container)`,
+    `[judge smoke] AC + full WA (${result.cases.length} cases, ${result.containerStarts} container, ${peakMemoryKb} KiB calibrated)`,
   );
 }

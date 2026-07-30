@@ -1,8 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
+import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
   loadPlayerSave,
@@ -13,7 +14,13 @@ import {
   saveQuestDraft,
   saveQuestProgress,
 } from "@/lib/api-client";
-import { isQuestUnlocked, Quest, QuestStatus, quests } from "@/lib/quests";
+import { isQuestUnlocked, Quest, quests } from "@/lib/quests";
+import {
+  Locale,
+  localeOptions,
+  localizeQuest,
+  text,
+} from "@/lib/i18n";
 import {
   addSubmission,
   hasSaveData,
@@ -55,57 +62,6 @@ function Difficulty({ value }: { value: number }) {
   );
 }
 
-function QuestNode({
-  quest,
-  selected,
-  completed,
-  playable,
-  displayStatus,
-  onSelect,
-  onOpen,
-}: {
-  quest: Quest;
-  selected: boolean;
-  completed: boolean;
-  playable: boolean;
-  displayStatus: QuestStatus;
-  onSelect: () => void;
-  onOpen: () => void;
-}) {
-  const disabled = displayStatus === "secret";
-  return (
-    <button
-      className={`quest-node quest-node--${displayStatus} ${
-        selected ? "is-selected" : ""
-      } ${completed ? "is-completed" : ""} ${playable ? "is-playable" : ""}`}
-      style={{ gridArea: quest.gridArea }}
-      onClick={playable ? onOpen : onSelect}
-      disabled={disabled}
-      aria-label={
-        playable
-          ? `${quest.title}, playable, enter mission`
-          : `${quest.title}, ${displayStatus}`
-      }
-    >
-      <span className="node-cap">
-        {completed
-          ? "[CLEARED]"
-          : playable
-            ? "[PLAYABLE]"
-          : displayStatus === "locked"
-            ? "[LOCKED]"
-            : `[${quest.index}]`}
-      </span>
-      <span className="node-core">
-        {displayStatus === "secret" ? "?" : quest.index}
-      </span>
-      <strong>{quest.title}</strong>
-      <small>{quest.subtitle}</small>
-      {playable && <span className="node-action">&gt; ENTER</span>}
-    </button>
-  );
-}
-
 type SaveConflict = {
   local: PlayerSave;
   cloud: PlayerSave;
@@ -120,9 +76,11 @@ function openAccount(view: "login" | "register" = "login") {
 function SaveCard({
   label,
   save,
+  cloud,
 }: {
-  label: "LOCAL SAVE" | "CLOUD SAVE";
+  label: string;
   save: PlayerSave;
+  cloud: boolean;
 }) {
   const summary = saveSummary(save);
   const latestDraft = [...save.drafts].sort(
@@ -133,7 +91,7 @@ function SaveCard({
     <div className="save-card">
       <div className="save-card__heading">
         <strong>{label}</strong>
-        <span>{label === "LOCAL SAVE" ? "THIS DEVICE" : "PLAYER DATABASE"}</span>
+        <span>{cloud ? "PLAYER DATABASE" : "THIS DEVICE"}</span>
       </div>
       <dl>
         <div>
@@ -171,6 +129,7 @@ function SaveCard({
 
 export default function Home() {
   const [selected, setSelected] = useState<Quest>(quests[0]);
+  const [locale, setLocale] = useState<Locale>("en");
   const [notice, setNotice] = useState("ACCOUNT REQUIRED // WELCOME MODE");
   const [screen, setScreen] = useState<"world" | "mission">("world");
   const [cleared, setCleared] = useState<Set<string>>(new Set());
@@ -179,6 +138,13 @@ export default function Home() {
   const [saveConflict, setSaveConflict] = useState<SaveConflict>();
   const [syncingSave, setSyncingSave] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const copy = text(locale);
+  const displayedQuests = useMemo(
+    () => quests.map((quest) => localizeQuest(quest, locale)),
+    [locale],
+  );
+  const selectedDisplay =
+    displayedQuests.find((quest) => quest.id === selected.id) ?? selected;
 
   const canPlay = Boolean(
     player && !player.isGuest && player.emailVerified && playerSave,
@@ -196,7 +162,16 @@ export default function Home() {
     );
     setSaveConflict(undefined);
     setSaveError("");
-    setNotice("SAVE SYNCHRONIZED // SELECT A QUEST");
+    setNotice(copy.saveReady);
+  }, [copy.saveReady]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("algoquest.locale");
+    if (stored === "en" || stored === "zh-CN" || stored === "ja") {
+      // Restore the explicit player preference after hydration.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLocale(stored);
+    }
   }, []);
 
   const refreshAccountProgress = useCallback(() => {
@@ -216,8 +191,8 @@ export default function Home() {
           setScreen("world");
           setNotice(
             currentPlayer && !currentPlayer.isGuest
-              ? "EMAIL VERIFICATION REQUIRED // WELCOME MODE"
-              : "ACCOUNT REQUIRED // WELCOME MODE",
+              ? copy.emailRequired
+              : copy.accountRequired,
           );
           return;
         }
@@ -245,10 +220,10 @@ export default function Home() {
         setSaveError(
           error instanceof Error ? error.message : "Save service unavailable.",
         );
-        setNotice("SAVE LINK OFFLINE // GAMEPLAY LOCKED");
+        setNotice(copy.saveOffline);
       })
       .finally(() => setSyncingSave(false));
-  }, [applySave]);
+  }, [applySave, copy.accountRequired, copy.emailRequired, copy.saveOffline]);
 
   useEffect(() => {
     // Initial authentication and save hydration intentionally update page state.
@@ -395,7 +370,7 @@ export default function Home() {
   const selectedPlayable = isQuestUnlocked(selected, cleared);
 
   return (
-    <main className="site-shell">
+    <main className="site-shell" lang={locale === "zh-CN" ? "zh-CN" : locale}>
       <div className="scanlines" aria-hidden="true" />
 
       <header className="topbar">
@@ -407,26 +382,44 @@ export default function Home() {
           {canPlay ? (
             <>
               <a className="active" href="#map">
-                [ WORLD_MAP ]
+                [ {copy.worldMap} ]
               </a>
-              <a href="#missions">[ MISSIONS ]</a>
-              <a href="#codex">[ CODEX ]</a>
+              <a href="#missions">[ {copy.missions} ]</a>
+              <a href="#codex">[ {copy.codex} ]</a>
             </>
           ) : (
             <>
               <a className="active" href="#top">
-                [ WELCOME ]
+                [ {copy.welcome} ]
               </a>
-              <a href="#how-it-works">[ HOW_IT_WORKS ]</a>
+              <a href="#how-it-works">[ {copy.howItWorks} ]</a>
             </>
           )}
         </nav>
-        <AccountPanel
-          player={player}
-          level={cleared.size + 1}
-          onPlayerChange={setPlayer}
-          onAccountSync={refreshAccountProgress}
-        />
+        <div className="topbar-actions">
+          <div className="locale-switcher" aria-label="Language">
+            {localeOptions.map((option) => (
+              <button
+                type="button"
+                className={locale === option.value ? "is-active" : ""}
+                key={option.value}
+                onClick={() => {
+                  setLocale(option.value);
+                  window.localStorage.setItem("algoquest.locale", option.value);
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <AccountPanel
+            player={player}
+            level={cleared.size + 1}
+            onPlayerChange={setPlayer}
+            onAccountSync={refreshAccountProgress}
+            locale={locale}
+          />
+        </div>
       </header>
 
       <div className="status-line">
@@ -434,7 +427,7 @@ export default function Home() {
         <span className="status-message">
           {screen === "mission" ? "MISSION MODE // JUDGE LINK ACTIVE" : notice}
         </span>
-        <span>{canPlay ? "CLOUD SAVE ONLINE" : "WELCOME MODE"}</span>
+        <span>{canPlay ? copy.cloudSaveOnline : copy.welcomeMode}</span>
       </div>
 
       {saveConflict && (
@@ -450,15 +443,23 @@ export default function Home() {
               <span>DECISION REQUIRED</span>
             </div>
             <div className="save-conflict-panel__body">
-              <p className="eyebrow">TWO SAVE SLOTS DISAGREE</p>
-              <h2 id="save-conflict-title">CHOOSE YOUR SAVE</h2>
+              <p className="eyebrow">{copy.saveConflict}</p>
+              <h2 id="save-conflict-title">{copy.chooseSave}</h2>
               <p>
                 Code drafts follow the save you choose. Verified judge records
                 are retained and merged so an old result cannot vanish.
               </p>
               <div className="save-compare">
-                <SaveCard label="LOCAL SAVE" save={saveConflict.local} />
-                <SaveCard label="CLOUD SAVE" save={saveConflict.cloud} />
+                <SaveCard
+                  label={copy.localSave}
+                  save={saveConflict.local}
+                  cloud={false}
+                />
+                <SaveCard
+                  label={copy.cloudSave}
+                  save={saveConflict.cloud}
+                  cloud
+                />
               </div>
               {saveError && <p className="account-message">{saveError}</p>}
               <div className="save-choice-actions">
@@ -467,14 +468,14 @@ export default function Home() {
                   disabled={syncingSave}
                   onClick={() => void chooseSave("local")}
                 >
-                  [ USE LOCAL SAVE ]
+                  [ {copy.useLocal} ]
                 </button>
                 <button
                   type="button"
                   disabled={syncingSave}
                   onClick={() => void chooseSave("cloud")}
                 >
-                  [ USE CLOUD SAVE ]
+                  [ {copy.useCloud} ]
                 </button>
               </div>
             </div>
@@ -485,8 +486,13 @@ export default function Home() {
       {screen === "mission" && canPlay && playerSave ? (
         <MissionTerminal
           key={selected.id}
-          quest={selected}
-          nextQuestTitle={nextAfterSelected?.title}
+          quest={selectedDisplay}
+          nextQuestTitle={
+            nextAfterSelected
+              ? localizeQuest(nextAfterSelected, locale).title
+              : undefined
+          }
+          locale={locale}
           initialCode={
             playerSave.drafts.find((item) => item.questId === selected.id)
               ?.source
@@ -501,19 +507,16 @@ export default function Home() {
         <>
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow">COMPETITIVE PROGRAMMING // ADVENTURE MODE</p>
+          <p className="eyebrow">{copy.heroEyebrow}</p>
           <pre className="ascii-logo" aria-label="AlgoQuest">
             {logo}
           </pre>
           <h1>
-            LEARN THE SPELLS.
+            {copy.heroTitleA}
             <br />
-            <span>CONQUER THE ALGORITHMS.</span>
+            <span>{copy.heroTitleB}</span>
           </h1>
-          <p className="hero-description">
-            Your compiler is your blade. Your complexity is your armor. Travel
-            from the first line of C++ to the deepest ruins of graph theory.
-          </p>
+          <p className="hero-description">{copy.heroDescription}</p>
           <div className="hero-actions">
             {canPlay ? (
               <>
@@ -522,14 +525,18 @@ export default function Home() {
                   type="button"
                   onClick={() => openQuest(nextQuest)}
                 >
-                  &gt; {cleared.has(nextQuest.id) ? "REPLAY" : "CONTINUE"} QUEST_
+                  &gt;{" "}
+                  {cleared.has(nextQuest.id)
+                    ? copy.replayQuest
+                    : copy.continueQuest}{" "}
+                  QUEST_
                   {nextQuest.index}
                 </button>
                 <button
                   className="text-button"
                   onClick={refreshAccountProgress}
                 >
-                  [ SYNC_SAVE ]
+                  [ {copy.syncSave} ]
                 </button>
               </>
             ) : (
@@ -539,14 +546,14 @@ export default function Home() {
                   type="button"
                   onClick={() => openAccount("login")}
                 >
-                  &gt; LOGIN TO BEGIN_
+                  &gt; {copy.loginToBegin}
                 </button>
                 <button
                   className="text-button"
                   type="button"
                   onClick={() => openAccount("register")}
                 >
-                  [ CREATE PLAYER ]
+                  [ {copy.createPlayer} ]
                 </button>
               </>
             )}
@@ -554,12 +561,12 @@ export default function Home() {
           {!canPlay && (
             <p className="login-gate-note">
               {syncingSave
-                ? "CHECKING PLAYER DATABASE..."
+                ? copy.checkingSave
                 : saveError
                   ? `SAVE LINK ERROR // ${saveError}`
                   : player && !player.isGuest && !player.emailVerified
-                    ? "VERIFY YOUR EMAIL TO UNLOCK THE WORLD MAP."
-                    : "MISSIONS, EDITOR AND JUDGE UNLOCK AFTER LOGIN."}
+                    ? copy.verifyToUnlock
+                    : copy.loginToUnlock}
             </p>
           )}
         </div>
@@ -602,13 +609,13 @@ export default function Home() {
       <section className="world-section" id="map">
         <div className="section-title">
           <div>
-            <p className="eyebrow">CAMPAIGN_ROUTE // 01</p>
-            <h2>THE AWAKENING PATH</h2>
+            <p className="eyebrow">{copy.campaign}</p>
+            <h2>{copy.pathTitle}</h2>
           </div>
           <div className="map-legend">
-            <span><i className="legend-dot available" /> AVAILABLE</span>
-            <span><i className="legend-dot locked" /> LOCKED</span>
-            <span><i className="legend-dot secret" /> SECRET</span>
+            <span><i className="legend-dot available" /> {copy.available}</span>
+            <span><i className="legend-dot locked" /> {copy.locked}</span>
+            <span><i className="legend-dot secret" /> {copy.secret}</span>
           </div>
         </div>
 
@@ -617,77 +624,77 @@ export default function Home() {
           type="button"
           onClick={() => openQuest(nextQuest)}
         >
-          <span>{cleared.has(nextQuest.id) ? "REPLAYABLE" : "NEXT MISSION"}</span>
+          <span>
+            {cleared.has(nextQuest.id) ? copy.replayable : copy.nextMission}
+          </span>
           <strong>
-            {`QUEST ${nextQuest.index} // ${nextQuest.title.toUpperCase()}`}
+            {`QUEST ${nextQuest.index} // ${localizeQuest(
+              nextQuest,
+              locale,
+            ).title.toUpperCase()}`}
           </strong>
-          <span>&gt; CLICK TO ENTER_</span>
+          <span>&gt; {copy.clickEnter}</span>
         </button>
 
         <div className="world-grid">
-          <div className="quest-map" aria-label="Quest map">
-            <div className="map-paths" aria-hidden="true">
-              <span className="path p1">············</span>
-              <span className="path p2">········</span>
-              <span className="path p3">··········</span>
-              <span className="path p4">············</span>
-              <span className="path p5">·······</span>
-            </div>
-            {quests.map((quest) => {
+          <QuestMap
+            questStates={quests.map((quest) => {
               const playable = isQuestUnlocked(quest, cleared);
               const completed = cleared.has(quest.id);
               const displayStatus =
                 playable || completed ? "available" : quest.status;
-              return (
-                <QuestNode
-                  key={quest.id}
-                  quest={quest}
-                  selected={selected.id === quest.id}
-                  completed={completed}
-                  playable={playable}
-                  displayStatus={displayStatus}
-                  onSelect={() => {
-                    setSelected(quest);
-                    setNotice(
-                      quest.status === "secret"
-                        ? "ANOMALY DETECTED // ACCESS CONDITION UNKNOWN"
-                        : `QUEST SELECTED // ${quest.title.toUpperCase()}`,
-                    );
-                  }}
-                  onOpen={() => openQuest(quest)}
-                />
-              );
+              return {
+                base: quest,
+                display: localizeQuest(quest, locale),
+                completed,
+                playable,
+                displayStatus,
+              };
             })}
-          </div>
+            selectedId={selected.id}
+            copy={copy}
+            onSelect={(quest) => {
+              setSelected(quest);
+              setNotice(
+                quest.status === "secret"
+                  ? "ANOMALY DETECTED // ACCESS CONDITION UNKNOWN"
+                  : `QUEST SELECTED // ${localizeQuest(
+                      quest,
+                      locale,
+                    ).title.toUpperCase()}`,
+              );
+            }}
+            onOpen={openQuest}
+          />
 
           <aside className="quest-brief" id="missions">
             <div className="panel-heading">
-              <span>{selected.chapter}</span>
-              <span>#{selected.index}</span>
+              <span>{selectedDisplay.chapter}</span>
+              <span>#{selectedDisplay.index}</span>
             </div>
             <p className="quest-kicker">
               {selected.status === "secret"
-                ? "ENCRYPTED ENCOUNTER"
+                ? copy.encrypted
                 : selectedPlayable
-                  ? "MISSION READY"
-                  : "MISSION BRIEF"}
+                  ? copy.missionReady
+                  : copy.missionBrief}
             </p>
-            <h3>{selected.title}</h3>
-            <p>{selected.description}</p>
+            <h3>{selectedDisplay.title}</h3>
+            <p>{selectedDisplay.description}</p>
 
             <div className="brief-divider">+------------------------------+</div>
             <div className="brief-row">
-              <span>DIFFICULTY</span>
-              <Difficulty value={selected.difficulty} />
+              <span>{copy.difficulty}</span>
+              <Difficulty value={selectedDisplay.difficulty} />
             </div>
             <div className="brief-row">
-              <span>REWARD</span>
-              <strong>+{selected.xp} XP</strong>
+              <span>{copy.reward}</span>
+              <strong>+{selectedDisplay.xp} XP</strong>
             </div>
             <div className="brief-row skills-row">
-              <span>SKILLS</span>
+              <span>{copy.skills}</span>
               <div>
-                {selected.skills.map((skill) => (
+                {selectedDisplay.skills.map((skill) => (
                   <code key={skill}>{skill}</code>
                 ))}
               </div>
@@ -701,8 +708,8 @@ export default function Home() {
               {selected.status === "secret"
                 ? "[ ACCESS DENIED ]"
                 : selectedPlayable
-                  ? "> ENTER MISSION_"
-                  : `[ CLEAR QUEST ${selected.prerequisites
+                  ? `> ${copy.enterMission}`
+                  : `[ ${copy.clearQuest} ${selected.prerequisites
                       .map(
                         (questId) =>
                           quests.find((quest) => quest.id === questId)?.index ??
@@ -717,45 +724,26 @@ export default function Home() {
         <section className="welcome-info" id="how-it-works">
           <div className="section-title">
             <div>
-              <p className="eyebrow">WELCOME_PROTOCOL // READ ONLY</p>
-              <h2>HOW THE ADVENTURE WORKS</h2>
+              <p className="eyebrow">{copy.welcomeProtocol}</p>
+              <h2>{copy.adventureWorks}</h2>
             </div>
-            <span className="welcome-lock">[ MISSIONS LOCKED ]</span>
+            <span className="welcome-lock">[ {copy.missionsLocked} ]</span>
           </div>
           <div className="welcome-grid">
-            <article>
-              <span>01</span>
-              <h3>CREATE A PLAYER</h3>
-              <p>
-                Register and verify your email. Guests can read this
-                introduction, but cannot open problems or call the judge.
-              </p>
-            </article>
-            <article>
-              <span>02</span>
-              <h3>CODE LIKE VS CODE</h3>
-              <p>
-                Solve C++ missions in a real Monaco editor with automatic
-                indentation, bracket matching, nested bracket colors and a
-                minimap.
-              </p>
-            </article>
-            <article>
-              <span>03</span>
-              <h3>NEVER LOSE A RUN</h3>
-              <p>
-                Drafts, source snapshots and every evaluation stay on this
-                device and in your player database. Conflicts are always your
-                choice.
-              </p>
-            </article>
+            {copy.welcomeSteps.map(([title, description], index) => (
+              <article key={title}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </article>
+            ))}
           </div>
           <button
             className="primary-button welcome-register"
             type="button"
             onClick={() => openAccount("register")}
           >
-            &gt; CREATE PLAYER_
+            &gt; {copy.createPlayer}_
           </button>
         </section>
       )}

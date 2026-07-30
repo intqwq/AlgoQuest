@@ -2,6 +2,7 @@ export type QuestStatus = "available" | "locked" | "secret";
 
 export type QuestProblem = {
   story: string[];
+  guidance: string[];
   input: string;
   constraints: string;
   output: string;
@@ -27,6 +28,7 @@ export type Quest = {
   prerequisites: string[];
   chapter: string;
   gridArea: string;
+  mapPosition: { x: number; y: number };
   description: string;
   skills: string[];
   problem?: QuestProblem;
@@ -44,6 +46,7 @@ export const quests: Quest[] = [
     prerequisites: [],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q1",
+    mapPosition: { x: 13, y: 28 },
     description:
       "Wake the dormant relay by reading two energy values and printing their sum.",
     skills: ["cin / cout", "variables", "arithmetic"],
@@ -51,6 +54,13 @@ export const quests: Quest[] = [
       story: [
         "The outpost relay has slept for 4,096 cycles. Two energy cells remain, carrying a and b units.",
         "Read both values and output their sum to ignite the signal fire.",
+      ],
+      guidance: [
+        "Read the mission story and locate the INPUT, OUTPUT and SAMPLE panels.",
+        "Find the TODO marker in main.cpp. The editor autosaves every change.",
+        "Replace the TODO with a cout statement, then use RUN SAMPLE.",
+        "When the sample passes, use SUBMIT SOLUTION to run every hidden case.",
+        "After AC, close the congratulations card and return to the map.",
       ],
       input: "One line containing two integers a and b.",
       constraints: "-10⁹ ≤ a, b ≤ 10⁹",
@@ -90,6 +100,7 @@ int main() {
     prerequisites: ["signal-fire"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q2",
+    mapPosition: { x: 34, y: 25 },
     description:
       "Choose the safer tunnel by comparing two danger readings.",
     skills: ["if / else", "comparison"],
@@ -97,6 +108,11 @@ int main() {
       story: [
         "The road divides beneath the mountain. The left and right tunnels report separate danger readings.",
         "Choose the tunnel with the smaller reading. If both readings match, hold position.",
+      ],
+      guidance: [
+        "List the three possible relationships: left is smaller, right is smaller, or equal.",
+        "Use if / else if / else so exactly one answer is printed.",
+        "Run the sample first, then submit to check all edge cases.",
       ],
       input: "One line containing two integers left and right.",
       constraints: "-10⁹ ≤ left, right ≤ 10⁹",
@@ -140,12 +156,18 @@ int main() {
     prerequisites: ["forked-path"],
     chapter: "CH.01 / AWAKENING",
     gridArea: "q3",
+    mapPosition: { x: 56, y: 30 },
     description: "Repeat the ancient signal until the gate responds.",
     skills: ["for", "while"],
     problem: {
       story: [
         "A sealed gate accepts a rising sequence of pulses, beginning at one.",
         "Transmit every pulse from 1 through n on one line, separated by spaces.",
+      ],
+      guidance: [
+        "Identify the first value, last value and repeated step.",
+        "Use a for or while loop and handle spaces without adding unwanted text.",
+        "Run the sample, then submit to evaluate every hidden value of n.",
       ],
       input: "One integer n.",
       constraints: "1 ≤ n ≤ 1,000",
@@ -190,6 +212,7 @@ int main() {
     prerequisites: ["echo-loop"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q4",
+    mapPosition: { x: 27, y: 67 },
     description: "Reconstruct a key hidden across a sequence of memory cells.",
     skills: ["arrays", "traversal"],
   },
@@ -204,6 +227,7 @@ int main() {
     prerequisites: ["array-vault"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q5",
+    mapPosition: { x: 52, y: 66 },
     description: "Restore a shattered archive by returning every rune to order.",
     skills: ["sort", "complexity"],
   },
@@ -218,6 +242,7 @@ int main() {
     prerequisites: ["sorting-ruins"],
     chapter: "CH.02 / FIRST DATA",
     gridArea: "q6",
+    mapPosition: { x: 76, y: 72 },
     description: "Find one frequency among millions before the gate closes.",
     skills: ["binary search", "invariants"],
   },
@@ -232,6 +257,7 @@ int main() {
     prerequisites: [],
     chapter: "SECRET / UNKNOWN",
     gridArea: "secret",
+    mapPosition: { x: 84, y: 24 },
     description: "The wall sounds hollow here. Something waits behind it.",
     skills: ["???"],
   },

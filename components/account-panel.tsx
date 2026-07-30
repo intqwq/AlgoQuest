@@ -15,6 +15,7 @@ import {
   updatePlayerProfile,
   verifyEmail,
 } from "@/lib/api-client";
+import type { Locale } from "@/lib/i18n";
 
 type AuthView =
   | "login"
@@ -133,6 +134,90 @@ const errorMessages: Record<string, string> = {
   RATE_LIMITED: "Too many attempts. Pause before trying again.",
 };
 
+const accountMessages = {
+  en: {
+    loginRegister: "LOGIN / REGISTER",
+    guarded: "IDENTITY NODE // CLOUDFLARE GUARDED",
+    titles: {
+      register: "CREATE PLAYER",
+      login: "RESTORE PLAYER",
+      forgot: "RECOVER ACCESS",
+      reset: "NEW ACCESS KEY",
+      profile: "PLAYER DATABASE",
+      verify_pending: "VERIFY EMAIL",
+    },
+    playerName: "PLAYER NAME",
+    displayName: "DISPLAY NAME",
+    email: "EMAIL",
+    password: "PASSWORD",
+    newPassword: "NEW PASSWORD",
+    confirmPassword: "CONFIRM PASSWORD",
+    update: "UPDATE PROFILE",
+    execute: "EXECUTE",
+    transmitting: "TRANSMITTING...",
+    login: "LOGIN",
+    register: "REGISTER",
+    forgot: "FORGOT PASSWORD",
+    logout: "LOGOUT",
+    verified: "VERIFIED",
+    saveMode: "SAVE MODE",
+  },
+  "zh-CN": {
+    loginRegister: "登录 / 注册",
+    guarded: "身份节点 // CLOUDFLARE 安全验证",
+    titles: {
+      register: "创建玩家",
+      login: "登录玩家",
+      forgot: "找回账号",
+      reset: "设置新密码",
+      profile: "玩家数据库",
+      verify_pending: "验证邮箱",
+    },
+    playerName: "玩家名",
+    displayName: "显示名称",
+    email: "邮箱",
+    password: "密码",
+    newPassword: "新密码",
+    confirmPassword: "确认密码",
+    update: "更新资料",
+    execute: "执行",
+    transmitting: "传输中……",
+    login: "登录",
+    register: "注册",
+    forgot: "忘记密码",
+    logout: "退出登录",
+    verified: "已验证",
+    saveMode: "存档模式",
+  },
+  ja: {
+    loginRegister: "ログイン / 登録",
+    guarded: "ID ノード // CLOUDFLARE 保護",
+    titles: {
+      register: "プレイヤー作成",
+      login: "プレイヤー復元",
+      forgot: "アクセス回復",
+      reset: "新しいパスワード",
+      profile: "プレイヤーデータベース",
+      verify_pending: "メール認証",
+    },
+    playerName: "プレイヤー名",
+    displayName: "表示名",
+    email: "メール",
+    password: "パスワード",
+    newPassword: "新しいパスワード",
+    confirmPassword: "パスワード確認",
+    update: "プロフィール更新",
+    execute: "実行",
+    transmitting: "送信中…",
+    login: "ログイン",
+    register: "登録",
+    forgot: "パスワードを忘れた",
+    logout: "ログアウト",
+    verified: "認証済み",
+    saveMode: "セーブモード",
+  },
+} as const;
+
 function messageFor(error: unknown) {
   if (error instanceof AuthApiError) {
     return errorMessages[error.code] ?? `Account request failed: ${error.code}`;
@@ -145,11 +230,13 @@ export function AccountPanel({
   level,
   onPlayerChange,
   onAccountSync,
+  locale,
 }: {
   player?: Player;
   level: number;
   onPlayerChange: (player: Player | undefined) => void;
   onAccountSync: () => void;
+  locale: Locale;
 }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<AuthView>("login");
@@ -161,6 +248,7 @@ export function AccountPanel({
   const [resetToken, setResetToken] = useState("");
   const [pendingEmail, setPendingEmail] = useState("");
   const linkHandledRef = useRef(false);
+  const copy = accountMessages[locale];
 
   const action =
     view === "register"
@@ -335,7 +423,7 @@ export function AccountPanel({
         <span className={`online-dot ${player ? "" : "is-offline"}`} />
         {player && !player.isGuest
           ? `${player.displayName.toUpperCase()} // LV.${String(level).padStart(2, "0")}`
-          : "LOGIN / REGISTER"}
+          : copy.loginRegister}
       </button>
 
       {open && (
@@ -353,14 +441,9 @@ export function AccountPanel({
               </button>
             </div>
             <div className="account-panel__body">
-              <p className="eyebrow">IDENTITY NODE // CLOUDFLARE GUARDED</p>
+              <p className="eyebrow">{copy.guarded}</p>
               <h2 id="account-title">
-                {view === "register" && "CREATE PLAYER"}
-                {view === "login" && "RESTORE PLAYER"}
-                {view === "forgot" && "RECOVER ACCESS"}
-                {view === "reset" && "NEW ACCESS KEY"}
-                {view === "profile" && "PLAYER DATABASE"}
-                {view === "verify_pending" && "VERIFY EMAIL"}
+                {copy.titles[view]}
               </h2>
 
               {view === "profile" && player ? (
@@ -368,15 +451,15 @@ export function AccountPanel({
                   <div className="account-record">
                     <span>PLAYER_ID</span>
                     <code>{player.id}</code>
-                    <span>EMAIL</span>
+                    <span>{copy.email}</span>
                     <code>{player.email ?? "NOT_LINKED"}</code>
-                    <span>VERIFIED</span>
+                    <span>{copy.verified}</span>
                     <code>{player.emailVerified ? "YES" : "NO"}</code>
-                    <span>SAVE_MODE</span>
+                    <span>{copy.saveMode}</span>
                     <code>CROSS_DEVICE</code>
                   </div>
                   <label>
-                    DISPLAY NAME
+                    {copy.displayName}
                     <input
                       name="displayName"
                       defaultValue={player.displayName}
@@ -385,14 +468,14 @@ export function AccountPanel({
                     />
                   </label>
                   <button className="account-submit" disabled={busy}>
-                    [ UPDATE PROFILE ]
+                    [ {copy.update} ]
                   </button>
                 </form>
               ) : (
                 <form onSubmit={submit}>
                   {view === "register" && (
                     <label>
-                      PLAYER NAME
+                      {copy.playerName}
                       <input
                         name="displayName"
                         autoComplete="nickname"
@@ -403,7 +486,7 @@ export function AccountPanel({
                   )}
                   {view !== "reset" && (
                     <label>
-                      EMAIL
+                      {copy.email}
                       <input
                         name="email"
                         type="email"
@@ -420,7 +503,7 @@ export function AccountPanel({
                   )}
                   {["login", "register", "reset"].includes(view) && (
                     <label>
-                      {view === "reset" ? "NEW PASSWORD" : "PASSWORD"}
+                      {view === "reset" ? copy.newPassword : copy.password}
                       <input
                         name="password"
                         type="password"
@@ -435,7 +518,7 @@ export function AccountPanel({
                   )}
                   {view === "reset" && (
                     <label>
-                      CONFIRM PASSWORD
+                      {copy.confirmPassword}
                       <input
                         name="passwordConfirmation"
                         type="password"
@@ -464,7 +547,9 @@ export function AccountPanel({
                       (needsTurnstile && !turnstileToken)
                     }
                   >
-                    {busy ? "[ TRANSMITTING... ]" : "[ EXECUTE ]"}
+                    {busy
+                      ? `[ ${copy.transmitting} ]`
+                      : `[ ${copy.execute} ]`}
                   </button>
                 </form>
               )}
@@ -479,17 +564,17 @@ export function AccountPanel({
               <div className="account-switches">
                 {view !== "login" && (
                   <button type="button" onClick={() => selectView("login")}>
-                    [ LOGIN ]
+                    [ {copy.login} ]
                   </button>
                 )}
                 {view !== "register" && (!player || player.isGuest) && (
                   <button type="button" onClick={() => selectView("register")}>
-                    [ REGISTER ]
+                    [ {copy.register} ]
                   </button>
                 )}
                 {view === "login" && (
                   <button type="button" onClick={() => selectView("forgot")}>
-                    [ FORGOT PASSWORD ]
+                    [ {copy.forgot} ]
                   </button>
                 )}
                 {view === "profile" && player && !player.isGuest && (
@@ -503,7 +588,7 @@ export function AccountPanel({
                       });
                     }}
                   >
-                    [ LOGOUT ]
+                    [ {copy.logout} ]
                   </button>
                 )}
               </div>

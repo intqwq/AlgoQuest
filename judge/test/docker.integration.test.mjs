@@ -36,6 +36,9 @@ int main(){ long long a,b; cin>>a>>b; cout<<a-b<<'\\n'; }`,
     quest,
   );
   assert.equal(result.verdict, "WA");
+  assert.equal(result.cases.length, quest.tests.length);
+  assert.ok(result.cases.every((item) => !("expected" in item)));
+  assert.ok(result.cases.every((item) => !("received" in item)));
 });
 
 test("infinite loop reaches the wall-clock limit", { skip: !enabled }, async () => {

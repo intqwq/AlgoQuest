@@ -22,6 +22,7 @@ MAX_OUTPUT_BYTES = 64 * 1024
 WORK_ROOT = Path(os.environ.get("ALGOQUEST_RUNNER_WORK_ROOT", "/work"))
 COMPILE_ROOT = WORK_ROOT / "compile"
 COMPILED_BINARY_PATH = COMPILE_ROOT / "main"
+MEMORY_BASELINE_PATH = Path("/opt/algoquest/memory_baseline")
 
 
 def emit(payload):
@@ -145,7 +146,41 @@ def read_metrics(path, fallback_ms):
         return max(1, math.ceil(fallback_ms)), 0
 
 
-def run_case(test, manifest):
+def measure_memory_baseline(manifest):
+    metrics_path = WORK_ROOT / "baseline.metrics"
+    command = [
+        "/usr/bin/time",
+        "-f",
+        "%e %M",
+        "-o",
+        str(metrics_path),
+        str(MEMORY_BASELINE_PATH),
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=WORK_ROOT,
+        preexec_fn=child_limits(
+            memory_bytes=int(manifest["memoryLimitMb"]) * 1024 * 1024,
+            time_limit_ms=1000,
+        ),
+    )
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    kill_runner_processes()
+    _, memory_kb = read_metrics(metrics_path, 0)
+    return memory_kb
+
+
+def run_case(test, manifest, memory_baseline_kb):
     case_root = WORK_ROOT / f"case-{test['id']}"
     case_root.mkdir(mode=0o777)
     os.chmod(case_root, 0o777)
@@ -192,7 +227,12 @@ def run_case(test, manifest):
 
     elapsed_ms = (time.monotonic() - started) * 1000
     kill_runner_processes()
-    time_ms, memory_kb = read_metrics(metrics_path, elapsed_ms)
+    time_ms, raw_memory_kb = read_metrics(metrics_path, elapsed_ms)
+    # GNU time reports the dynamic loader and C++ runtime as contestant
+    # memory. Calibrate that fixed cost with an equivalent no-op C++ process,
+    # while retaining 256 KiB as a conservative measurement floor.
+    memory_overhead_kb = max(0, memory_baseline_kb - 256)
+    memory_kb = max(0, raw_memory_kb - memory_overhead_kb)
     stdout = clamp_text(stdout_path)
     stderr = clamp_text(stderr_path, 4096)
     output_exceeded = (
@@ -207,7 +247,7 @@ def run_case(test, manifest):
     elif output_exceeded:
         verdict = "OLE"
     elif (
-        memory_kb >= int(manifest["memoryLimitMb"]) * 1024
+        raw_memory_kb >= int(manifest["memoryLimitMb"]) * 1024
         or "std::bad_alloc" in stderr
         or "Cannot allocate memory" in stderr
     ):
@@ -223,9 +263,6 @@ def run_case(test, manifest):
         "timeMs": time_ms,
         "memoryKb": memory_kb,
     }
-    if verdict == "WA":
-        result["expected"] = test["expected"].rstrip()
-        result["received"] = stdout.rstrip()
     if verdict == "RE":
         result["stderr"] = stderr
     return result
@@ -248,13 +285,13 @@ def main():
     )
     cases = []
     verdict = "AC"
+    memory_baseline_kb = measure_memory_baseline(manifest)
     for test in manifest["tests"]:
-        result = run_case(test, manifest)
+        result = run_case(test, manifest, memory_baseline_kb)
         cases.append(result)
         emit({"type": "case", "case": result})
-        if result["verdict"] != "AC":
+        if verdict == "AC" and result["verdict"] != "AC":
             verdict = result["verdict"]
-            break
 
     emit(
         {

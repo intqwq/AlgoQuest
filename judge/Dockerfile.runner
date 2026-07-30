@@ -6,7 +6,14 @@ RUN apt-get update \
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin runner
 COPY runner/submission_runner.py /opt/algoquest/submission_runner.py
-RUN chmod 0555 /opt/algoquest/submission_runner.py
+COPY runner/memory_baseline.cpp /opt/algoquest/memory_baseline.cpp
+RUN g++ -std=gnu++14 -O2 -pipe \
+      -o /opt/algoquest/memory_baseline \
+      /opt/algoquest/memory_baseline.cpp \
+    && rm /opt/algoquest/memory_baseline.cpp \
+    && chmod 0555 \
+      /opt/algoquest/submission_runner.py \
+      /opt/algoquest/memory_baseline
 
 WORKDIR /workspace
 

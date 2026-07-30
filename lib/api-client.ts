@@ -77,6 +77,25 @@ const apiBase = (
 const sessionStorageKey = "algoquest.session-token";
 const pendingGuestSessionKey = "algoquest.pending-guest-session";
 let sessionPromise: Promise<string> | undefined;
+const transientApiStatuses = new Set([429, 502, 503, 504]);
+
+async function retryingFetch(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  attempts = 3,
+) {
+  let response: Response | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    response = await fetch(input, init);
+    if (!transientApiStatuses.has(response.status) || attempt === attempts - 1) {
+      return response;
+    }
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, 300 * 2 ** attempt),
+    );
+  }
+  return response!;
+}
 
 export function apiUrl(path: string) {
   return `${apiBase}${path.startsWith("/") ? path : `/${path}`}`;
@@ -183,7 +202,7 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
 export async function loadCurrentPlayer(): Promise<Player | undefined> {
   const token = window.localStorage.getItem(sessionStorageKey);
   if (!token) return undefined;
-  const response = await fetch(apiUrl("/me"), {
+  const response = await retryingFetch(apiUrl("/me"), {
     headers: {
       accept: "application/json",
       authorization: `Bearer ${token}`,
@@ -207,9 +226,21 @@ export async function requireCurrentPlayer(): Promise<Player> {
 }
 
 export async function loadPlayerSave(): Promise<PlayerSave> {
-  const response = await authenticatedFetch(apiUrl("/me/save"), {
+  let response = await authenticatedFetch(apiUrl("/me/save"), {
     headers: { accept: "application/json" },
   });
+  for (
+    let attempt = 0;
+    transientApiStatuses.has(response.status) && attempt < 2;
+    attempt += 1
+  ) {
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, 300 * 2 ** attempt),
+    );
+    response = await authenticatedFetch(apiUrl("/me/save"), {
+      headers: { accept: "application/json" },
+    });
+  }
   if (!response.ok) {
     throw new Error(`Save API returned HTTP ${response.status}.`);
   }
