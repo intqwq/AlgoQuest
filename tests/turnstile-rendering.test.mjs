@@ -33,3 +33,18 @@ test("root layout preloads the official explicit-render Turnstile API", async ()
   );
   assert.match(layout, /data-algoquest-turnstile="true"/);
 });
+
+test("gateway re-resolves recreated Docker services", async () => {
+  const nginx = await readFile(
+    new URL("../deploy/nginx/default.conf.template", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(nginx, /resolver 127\.0\.0\.11 valid=10s ipv6=off/);
+  assert.match(nginx, /set \$api_upstream "\$\{API_UPSTREAM\}"/);
+  assert.match(nginx, /set \$web_upstream "\$\{WEB_UPSTREAM\}"/);
+  assert.match(nginx, /rewrite \^\/api\/\(\.\*\)\$ \/\$1 break/);
+  assert.match(nginx, /proxy_pass \$api_upstream/);
+  assert.match(nginx, /proxy_pass \$web_upstream/);
+  assert.doesNotMatch(nginx, /proxy_pass \$\{API_UPSTREAM\}/);
+});
