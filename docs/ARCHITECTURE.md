@@ -37,7 +37,7 @@ tests, or the private Judge token.
 - Creates temporary guest identities during registration/save transfer.
 - Creates verified email/password accounts and revocable sessions.
 - Sends verification and password-reset mail through Resend.
-- Validates Turnstile token, action, and hostname server-side.
+- Validates Turnstile token, action, and hostname server-side with bounded timeouts, idempotent transient retries, and classified failure reasons.
 - Applies persistent per-IP/per-email authentication limits.
 - Hashes passwords with salted `scrypt` and stores only hashes of bearer tokens.
 - Resolves local/cloud save conflicts and stores the latest draft per quest.
@@ -64,16 +64,18 @@ tests, or the private Judge token.
 
 #### Hidden-test transport
 
-The job directory mounted into the runner contains only contestant source and,
-after compilation, the executable. The trusted manifest is JSON-serialized into
-the Docker process stdin. The root supervisor reads it once with a bounded size,
-closes fd 0, and retains the tests only in its own memory. Contestant processes
-receive only the current test input through their own stdin.
+The single-job `/submission` mount is read-only and contains contestant source
+plus an optional host-prepared cached binary. The trusted manifest is
+JSON-serialized into Docker stdin. The root supervisor reads it once with a
+bounded size, seals fd 0 to `/dev/null`, and retains tests only in memory.
+Contestant UID/GID `10001` children receive only the current test input through
+their own stdin.
 
-This avoids host/container UID mismatches on a `0600` manifest and removes the
-old contestant-visible `manifest.json` target entirely. A Docker regression
-attempts to read both the old mount path and the supervisor stdin before the
-change can be merged.
+Fresh binaries remain in the private `/work` tmpfs while contestant code runs.
+After the container stops, the Judge may export the binary with `docker cp` for
+cache reuse, so submitted code never sees a writable host path. The Docker
+regression probes the old manifest path, PID 1 command line and fd 0, and write
+access to `/submission` before the change can merge.
 
 ### PostgreSQL
 

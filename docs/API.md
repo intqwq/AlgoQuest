@@ -48,7 +48,21 @@ returned by `/v1/quests`; custom hidden tests are never returned there.
 Registration, login, resend, forgot-password, and reset operations use both
 Gateway per-IP limits and persistent API rate limits. Turnstile tokens are
 single-use and are validated by the Core API for the expected action and
-hostname.
+hostname. Siteverify uses a four-second per-attempt deadline and up to three
+bounded retries for network failures, timeouts, `429`/`5xx`, malformed upstream
+JSON, or Cloudflare `internal-error`; one idempotency key is reused across those
+attempts.
+
+Turnstile failures keep the compatible outer codes
+`HUMAN_VERIFICATION_FAILED` (`400`) and `HUMAN_VERIFICATION_UNAVAILABLE` (`503`).
+The response also includes `reason`, `retryable`, `resetWidget`, and `attempts`.
+Possible reasons are `TURNSTILE_TOKEN_REQUIRED`, `TURNSTILE_TOKEN_EXPIRED`,
+`TURNSTILE_REJECTED`, `TURNSTILE_ACTION_MISMATCH`,
+`TURNSTILE_HOSTNAME_MISMATCH`, `TURNSTILE_TIMEOUT`,
+`TURNSTILE_NETWORK_ERROR`, `TURNSTILE_UPSTREAM_ERROR`,
+`TURNSTILE_INVALID_RESPONSE`, `TURNSTILE_UNAVAILABLE`, and
+`TURNSTILE_MISCONFIGURED`. Retryable `503` responses include `retryAfterMs` and
+a matching `Retry-After` header.
 
 ## Saves, drafts, and progress
 
@@ -172,15 +186,19 @@ The Core API may include a `trustedQuest` only because it possesses the private
 Judge token. The Judge validates test count, input/output sizes, time, memory,
 compile limit, and pass score before accepting it.
 
-For each job, the Judge writes only `main.cpp` and the compiled binary into the
-contestant-visible mount. The trusted manifest is serialized to the disposable
-container's stdin, read once by the root supervisor, and fd 0 is closed before
-any contestant process starts. Test input is then supplied separately to each
-UID/GID `10001` child process.
+For each job, the Judge exposes a read-only single-job `/submission` mount with
+`main.cpp` and, on a cache hit, a host-prepared executable. The trusted manifest
+is serialized to disposable-container stdin, read once by the root supervisor,
+and fd 0 is then sealed to `/dev/null`. Fresh binaries stay in private `/work`
+until the container stops; optional cache export happens afterward with
+`docker cp`. Each UID/GID `10001` child receives only its current test input.
 
 ## Retry semantics
 
 The Web retries transient `429`, `502`, `503`, and `504` responses with bounded
-exponential backoff. Submission polling reuses the same job ID and respects
+exponential backoff. The Core API independently retries only transient Turnstile
+Siteverify failures and reuses the same idempotency key; permanent token or
+policy failures are returned immediately so the browser can reset the widget.
+Submission polling reuses the same job ID and respects
 `pollAfterMs`/`retryAfterMs`; it must not create a duplicate submission merely
 because status polling temporarily fails.
