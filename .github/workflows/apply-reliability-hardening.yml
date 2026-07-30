@@ -45,23 +45,65 @@ jobs:
                   '      "run",\n      "--interactive",\n      "--name",',
               ),
               (
-                  '  await chmod(jobDir, 0o755);\n  await writeFile(sourcePath, source, { mode: 0o644 });\n  if (cacheHit) {',
-                  '  // Fresh compilation exports a cache candidate only after all contestant\n'
-                  '  // processes exit, so the temporary directory may be writable during that\n'
-                  '  // final supervisor-only step. Cached submissions remain read-only.\n'
-                  '  await chmod(jobDir, cacheHit ? 0o755 : 0o777);\n'
+                  '  const runnerJobDir = WORK_VOLUME\n'
+                  '    ? `/judge-data/jobs/${path.basename(jobDir)}`\n'
+                  '    : "/submission";\n'
+                  '  const jobMount = WORK_VOLUME\n'
+                  '    ? `type=volume,src=${WORK_VOLUME},dst=/judge-data`\n'
+                  '    : `type=bind,src=${jobDir},dst=/submission`;\n',
+                  '  let hostJobDir = jobDir;\n'
+                  '  if (WORK_VOLUME) {\n'
+                  '    const volumeInspection = await docker([\n'
+                  '      "volume",\n'
+                  '      "inspect",\n'
+                  '      WORK_VOLUME,\n'
+                  '      "--format",\n'
+                  '      "{{.Mountpoint}}",\n'
+                  '    ]);\n'
+                  '    const mountpoint = volumeInspection.stdout.trim();\n'
+                  '    if (volumeInspection.code !== 0 || !mountpoint) {\n'
+                  '      throw new Error(`Cannot resolve Judge work volume ${WORK_VOLUME}`);\n'
+                  '    }\n'
+                  '    hostJobDir = path.join(mountpoint, "jobs", path.basename(jobDir));\n'
+                  '  }\n'
+                  '  const runnerJobDir = "/submission";\n'
+                  '  const jobMount = `type=bind,src=${hostJobDir},dst=/submission,readonly`;\n'
+                  '  const exportMount = `type=bind,src=${path.join(hostJobDir, "export")},dst=/export`;\n',
+              ),
+              (
+                  '      "--mount",\n      jobMount,\n      IMAGE,',
+                  '      "--mount",\n      jobMount,\n      "--mount",\n      exportMount,\n      IMAGE,',
+              ),
+              (
+                  '  const binaryPath = path.join(jobDir, "main");\n'
+                  '  const cachedBinary = path.join(CACHE_ROOT, cacheKey(source));',
+                  '  const binaryPath = path.join(jobDir, "main");\n'
+                  '  const exportDir = path.join(jobDir, "export");\n'
+                  '  const exportedBinary = path.join(exportDir, "main");\n'
+                  '  const cachedBinary = path.join(CACHE_ROOT, cacheKey(source));',
+              ),
+              (
+                  '  await chmod(jobDir, 0o755);\n'
                   '  await writeFile(sourcePath, source, { mode: 0o644 });\n'
+                  '  if (cacheHit) {',
+                  '  await chmod(jobDir, 0o755);\n'
+                  '  await mkdir(exportDir, { mode: 0o700 });\n'
+                  '  await chmod(exportDir, 0o700);\n'
+                  '  await writeFile(sourcePath, source, { mode: 0o444 });\n'
                   '  if (cacheHit) {',
               ),
               (
-                  '    if (\n      result.compiled &&\n      !cacheHit &&',
-                  '    if (!cacheHit) await chmod(jobDir, 0o755);\n'
-                  '    if (\n      result.compiled &&\n      !cacheHit &&',
+                  '      (await fileExists(binaryPath))\n'
+                  '    ) {\n'
+                  '      await storeCache(binaryPath, cachedBinary);',
+                  '      (await fileExists(exportedBinary))\n'
+                  '    ) {\n'
+                  '      await storeCache(exportedBinary, cachedBinary);',
               ),
           ]
           for old, new in replacements:
               if old not in text:
-                  raise SystemExit(f'Docker runner patch anchor not found: {old[:40]!r}')
+                  raise SystemExit(f'Docker runner patch anchor not found: {old[:60]!r}')
               text = text.replace(old, new, 1)
           docker_runner.write_text(text, encoding='utf-8')
 
@@ -69,19 +111,22 @@ jobs:
           text = supervisor.read_text(encoding='utf-8')
           replacements = [
               (
+                  'COMPILED_BINARY_PATH = COMPILE_ROOT / "main"\n',
+                  'COMPILED_BINARY_PATH = COMPILE_ROOT / "main"\n'
+                  'EXPORT_BINARY_PATH = Path("/export/main")\n',
+              ),
+              (
+                  '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
+                  '    sys.stdin.close()\n',
                   '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
                   '    sys.stdin.close()\n'
-                  '    if not payload:\n',
-                  '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
-                  '    sys.stdin.close()\n'
-                  '    # Keep descriptor 0 permanently harmless. Without this, Python may reuse\n'
-                  '    # the closed descriptor for compiler logs or metrics, which would expose\n'
-                  '    # unrelated supervisor files through /proc/1/fd/0.\n'
-                  '    null_fd = os.open(os.devnull, os.O_RDONLY)\n'
-                  '    if null_fd != 0:\n'
-                  '        os.dup2(null_fd, 0)\n'
-                  '        os.close(null_fd)\n'
-                  '    if not payload:\n',
+                  '    # Keep fd 0 occupied by /dev/null. Otherwise subprocess pipe creation can\n'
+                  '    # reuse descriptor 0, allowing contestant code to read hidden case input\n'
+                  '    # through /proc/1/fd/0.\n'
+                  '    devnull_fd = os.open(os.devnull, os.O_RDONLY)\n'
+                  '    if devnull_fd != 0:\n'
+                  '        os.dup2(devnull_fd, 0)\n'
+                  '        os.close(devnull_fd)\n',
               ),
               (
                   '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
@@ -90,8 +135,7 @@ jobs:
                   '        return None\n',
                   '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
                   '        # The host materializes cached binaries read-only before the container\n'
-                  '        # starts. Do not chmod host-owned bind-mount files after capabilities\n'
-                  '        # have been dropped.\n'
+                  '        # starts. Do not mutate the read-only contestant mount.\n'
                   '        return None\n',
               ),
               (
@@ -103,10 +147,7 @@ jobs:
                   '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
                   '    return None\n',
                   '    # Keep the compiler-owned executable inside the isolated /work tmpfs while\n'
-                  '    # contestant code is running. The compiler already creates an executable\n'
-                  '    # file; the capability-dropped supervisor deliberately does not chmod it.\n'
-                  '    # A read-only cache export is created only after every contestant process\n'
-                  '    # has terminated, preventing cache poisoning.\n'
+                  '    # contestant code is running. Cache export happens only after all cases.\n'
                   '    return None\n',
               ),
               (
@@ -125,44 +166,30 @@ jobs:
               (
                   '    emit(\n        {\n            "type": "result",\n',
                   '    if not manifest["cacheHit"]:\n'
-                  '        # Export only after all unprivileged children are gone. The host will\n'
-                  '        # tighten the directory permissions before reading this cache candidate.\n'
-                  '        shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)\n'
-                  '        os.chmod(BINARY_PATH, 0o555)\n\n'
+                  '        # /export is a separate root-only mount. Contestant UID 10001 cannot\n'
+                  '        # write to it, so the cached binary cannot be poisoned by submitted code.\n'
+                  '        shutil.copyfile(COMPILED_BINARY_PATH, EXPORT_BINARY_PATH)\n'
+                  '        os.chmod(EXPORT_BINARY_PATH, 0o555)\n\n'
                   '    emit(\n        {\n            "type": "result",\n',
               ),
           ]
           for old, new in replacements:
               if old not in text:
-                  raise SystemExit(f'Supervisor patch anchor not found: {old[:40]!r}')
+                  raise SystemExit(f'Supervisor patch anchor not found: {old[:60]!r}')
               text = text.replace(old, new, 1)
           supervisor.write_text(text, encoding='utf-8')
 
-          docker_tests = Path('judge/test/docker.integration.test.mjs')
-          text = docker_tests.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  '  `int main(){ volatile int *pointer = nullptr; *pointer = 7; }`,\n',
-                  '  `#include <cstdlib>\nint main(){ std::abort(); }`,\n',
-              ),
-              (
-                  'int main(){\n  bool exposed = ifstream("/submission/manifest.json").good();\n',
-                  'int main(){\n  string canary;\n  cin >> canary;\n  bool exposed = ifstream("/submission/manifest.json").good();\n',
-              ),
-              (
-                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
-                  '  char byte = 0;\n'
-                  '  if (supervisorInput.get(byte)) exposed = true;\n',
-                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
-                  '  string supervisorPayload((istreambuf_iterator<char>(supervisorInput)), istreambuf_iterator<char>());\n'
-                  '  if (!canary.empty() && supervisorPayload.find(canary) != string::npos) exposed = true;\n',
-              ),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'Docker test patch anchor not found: {old[:40]!r}')
-              text = text.replace(old, new, 1)
-          docker_tests.write_text(text, encoding='utf-8')
+          docker_test = Path('judge/test/docker.integration.test.mjs')
+          text = docker_test.read_text(encoding='utf-8')
+          old = '  bool exposed = ifstream("/submission/manifest.json").good();\n'
+          new = (
+              '  bool exposed = ifstream("/submission/manifest.json").good();\n'
+              '  exposed = exposed || ofstream("/submission/contestant-write-probe").good();\n'
+              '  exposed = exposed || ofstream("/export/contestant-write-probe").good();\n'
+          )
+          if old not in text:
+              raise SystemExit('Docker security test patch anchor not found')
+          docker_test.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
 
       - name: Install web dependencies
