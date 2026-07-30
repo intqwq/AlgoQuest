@@ -87,10 +87,11 @@ jobs:
                   '    os.chmod(BINARY_PATH, 0o555)\n'
                   '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
                   '    return None\n',
-                  '    # Keep the executable inside the isolated /work tmpfs while contestant\n'
-                  '    # code is running. A read-only cache export is created only after every\n'
-                  '    # contestant process has terminated, preventing cache poisoning.\n'
-                  '    os.chmod(COMPILED_BINARY_PATH, 0o555)\n'
+                  '    # Keep the compiler-owned executable inside the isolated /work tmpfs while\n'
+                  '    # contestant code is running. The compiler already creates an executable\n'
+                  '    # file; the capability-dropped supervisor deliberately does not chmod it.\n'
+                  '    # A read-only cache export is created only after every contestant process\n'
+                  '    # has terminated, preventing cache poisoning.\n'
                   '    return None\n',
               ),
               (
