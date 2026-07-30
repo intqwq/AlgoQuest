@@ -8,6 +8,7 @@ import {
   hashToken,
   normalizeEmail,
   passwordPolicyError,
+  playableAccountError,
   verifyPassword,
 } from "../src/auth.mjs";
 
@@ -46,6 +47,22 @@ test("password policy requires a bounded letter and number secret", () => {
     "PASSWORD_NEEDS_LETTER_AND_NUMBER",
   );
   assert.equal(passwordPolicyError("correct-horse-42"), undefined);
+});
+
+test("gameplay requires a verified non-guest account", () => {
+  assert.equal(playableAccountError(undefined), "ACCOUNT_REQUIRED");
+  assert.equal(
+    playableAccountError({ isGuest: true, emailVerified: false }),
+    "ACCOUNT_REQUIRED",
+  );
+  assert.equal(
+    playableAccountError({ isGuest: false, emailVerified: false }),
+    "EMAIL_NOT_VERIFIED",
+  );
+  assert.equal(
+    playableAccountError({ isGuest: false, emailVerified: true }),
+    undefined,
+  );
 });
 
 test("password hashes are salted and verify in constant-time form", async () => {
