@@ -3,7 +3,7 @@ name: Finalize Turnstile hardening
 on:
   push:
     branches:
-      - agent/judge-turnstile-reliability
+      - agent/reliability-snapshot-137
   pull_request:
     branches:
       - main
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/judge-turnstile-reliability
+          ref: agent/reliability-snapshot-137
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -70,7 +70,7 @@ jobs:
 
       - name: Upload commit object for connector publication
         continue-on-error: true
-        run: git push origin HEAD:agent/judge-turnstile-reliability
+        run: git push origin HEAD:agent/reliability-snapshot-137
 
       - name: Report validated commit
         run: echo "Validated final commit ${{ steps.final.outputs.sha }}"
