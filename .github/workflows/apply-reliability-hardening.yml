@@ -184,18 +184,16 @@ jobs:
                   '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) commandExposed = true;',
               ),
               (
-                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
-                  '  char byte = 0;\n'
-                  '  if (supervisorInput.get(byte)) exposed = true;\n'
-                  '  cout << (exposed ? "LEAK" : "SAFE") << \'\\n\';',
-                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
-                  '  char byte = 0;\n'
-                  '  bool stdinExposed = static_cast<bool>(supervisorInput.get(byte));\n'
+                  '  if (supervisorInput.get(byte)) exposed = true;',
+                  '  bool stdinExposed = static_cast<bool>(supervisorInput.get(byte));',
+              ),
+              (
+                  '  cout << (exposed ? "LEAK" : "SAFE")',
                   '  if (manifestExposed) return 7;\n'
                   '  if (commandExposed) for (;;) {}\n'
                   '  if (stdinExposed) { for (int i = 0; i < 200000; ++i) cout << "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n"; }\n'
                   '  if (writeExposed) { vector<char> memory(256ULL * 1024 * 1024); for (size_t i = 0; i < memory.size(); i += 4096) memory[i] = 1; }\n'
-                  '  cout << "SAFE" << \'\\n\';',
+                  '  cout << "SAFE"',
               ),
           ]
           for old, new in replacements:
