@@ -496,7 +496,7 @@ export function AccountPanel({
                 [ X ]
               </button>
             </div>
-            <div className="account-panel__body">
+            <div key={view} className="account-panel__body page-transition">
               <p className="eyebrow">{copy.guarded}</p>
               <h2 id="account-title">
                 {copy.titles[view]}

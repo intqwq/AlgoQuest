@@ -28,7 +28,8 @@ const copies = {
     empty: "NO PUBLISHED POSTS YET.",
     discussionGate: "Make at least one submission on this quest to post.",
     solutionGate: "Clear this quest before publishing a solution.",
-    moderationHint: "Player posts appear after an administrator or site owner approves them.",
+    discussionHint: "Discussions publish immediately after the submission requirement is met.",
+    solutionModerationHint: "Player solutions appear after an administrator or site owner approves them.",
     directHint: "Your role publishes immediately.",
   },
   "zh-CN": {
@@ -47,7 +48,8 @@ const copies = {
     empty: "暂时没有已发布内容。",
     discussionGate: "本关至少提交过一次后，才可以参与讨论。",
     solutionGate: "通关本关后，才可以发布题解。",
-    moderationHint: "普通玩家发布的内容需由管理员或站长审核后公开。",
+    discussionHint: "满足提交条件后，讨论会立即公开，无需审核。",
+    solutionModerationHint: "普通玩家发布的题解需由管理员或站长审核后公开。",
     directHint: "你的身份可以直接发布。",
   },
   ja: {
@@ -66,7 +68,8 @@ const copies = {
     empty: "公開済みの投稿はまだありません。",
     discussionGate: "このクエストに一度以上提出すると投稿できます。",
     solutionGate: "このクエストをクリアすると解説を投稿できます。",
-    moderationHint: "プレイヤーの投稿は管理者またはサイトオーナーの承認後に公開されます。",
+    discussionHint: "提出条件を満たしたディスカッションは審査なしですぐ公開されます。",
+    solutionModerationHint: "プレイヤーの解説は管理者またはサイトオーナーの承認後に公開されます。",
     directHint: "この権限ではすぐ公開されます。",
   },
 } as const;
@@ -178,7 +181,7 @@ export function EditorialPanel({
           ))}
           <button type="button" onClick={() => void refresh()}>[ {copy.refresh} ]</button>
         </nav>
-        <div className="editorial-body">
+        <div key={kind} className="editorial-body page-transition">
           <div className="editorial-feed">
             {visiblePosts.length ? (
               visiblePosts.map((post) => (
@@ -206,7 +209,13 @@ export function EditorialPanel({
           <form className="editorial-compose" onSubmit={submit}>
             <h3>{copy.newPost}</h3>
             <p>{kind === "discussion" ? copy.discussionGate : copy.solutionGate}</p>
-            <p>{eligibility.directPublish ? copy.directHint : copy.moderationHint}</p>
+            <p>
+    {kind === "discussion"
+      ? copy.discussionHint
+      : eligibility.directPublish
+        ? copy.directHint
+        : copy.solutionModerationHint}
+  </p>
             <label>
               {copy.postTitle}
               <input
@@ -229,7 +238,9 @@ export function EditorialPanel({
             </label>
             {message && <p className="editorial-message">{message}</p>}
             <button type="submit" disabled={!canPost || busy}>
-              [ {eligibility.directPublish ? copy.publish : copy.submitReview} ]
+              [ {kind === "discussion" || eligibility.directPublish
+      ? copy.publish
+      : copy.submitReview} ]
             </button>
           </form>
         </div>
