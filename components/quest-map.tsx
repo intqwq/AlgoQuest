@@ -25,7 +25,11 @@ type QuestState = {
   displayStatus: QuestStatus;
 };
 
-const canvas = { width: 1000, height: 600 };
+const canvas = { width: 1800, height: 1050 };
+const panLimit = {
+  x: Math.round(canvas.width * 0.42),
+  y: Math.round(canvas.height * 0.38),
+};
 
 function point(quest: Quest) {
   return {
@@ -141,8 +145,8 @@ export function QuestMap({
     const nextX = drag.current.originX + event.clientX - drag.current.x;
     const nextY = drag.current.originY + event.clientY - drag.current.y;
     pendingPan.current = {
-      x: Math.max(-360, Math.min(360, nextX)),
-      y: Math.max(-210, Math.min(210, nextY)),
+      x: Math.max(-panLimit.x, Math.min(panLimit.x, nextX)),
+      y: Math.max(-panLimit.y, Math.min(panLimit.y, nextY)),
     };
     if (panFrame.current !== undefined) return;
     panFrame.current = window.requestAnimationFrame(() => {
