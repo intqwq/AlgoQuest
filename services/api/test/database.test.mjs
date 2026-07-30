@@ -75,6 +75,20 @@ test("progress SQL gives every reused parameter one PostgreSQL type", () => {
   assert.equal(query.values.length, 4);
 });
 
+test("editorial insert gives its reused author parameter one UUID type", async () => {
+  const database = await readFile(
+    new URL("../src/database.mjs", import.meta.url),
+    "utf8",
+  );
+  const createPost = database.match(
+    /async createEditorialPost\([\s\S]*?async moderateEditorialPost/,
+  )?.[0];
+
+  assert.ok(createPost);
+  assert.equal(createPost.match(/\$3::uuid/g)?.length, 2);
+  assert.doesNotMatch(createPost, /THEN \$3 END/);
+});
+
 test("player save migration retains source snapshots and per-quest drafts", async () => {
   const migration = await readFile(
     new URL("../migrations/003_player_saves.sql", import.meta.url),
