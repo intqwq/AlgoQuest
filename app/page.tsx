@@ -174,6 +174,13 @@ export default function Home() {
   const canPlay = Boolean(
     player && !player.isGuest && player.emailVerified && playerSave,
   );
+  const canManage = player?.role === "admin" || player?.role === "owner";
+  const controlDeckLabel =
+    locale === "zh-CN"
+      ? "管理控制台"
+      : locale === "ja"
+        ? "管理コンソール"
+        : "CONTROL DECK";
 
   const refreshQuestCatalog = useCallback(() => {
     void loadQuestCatalog().then(
@@ -510,6 +517,17 @@ export default function Home() {
               <a href="#how-it-works">[ {copy.howItWorks} ]</a>
             </>
           )}
+          {canManage && (
+            <button
+              type="button"
+              className="topbar-admin-tab"
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent("algoquest:open-admin"))
+              }
+            >
+              [ {controlDeckLabel} ]
+            </button>
+          )}
         </nav>
         <div className="topbar-actions">
           <div className="locale-switcher" aria-label="Language">
@@ -534,14 +552,15 @@ export default function Home() {
             onAccountSync={refreshAccountProgress}
             locale={locale}
           />
-          <AdminConsole
-            player={player}
-            locale={locale}
-            builtInQuests={quests}
-            onCatalogChange={refreshQuestCatalog}
-          />
         </div>
       </header>
+
+      <AdminConsole
+        player={player}
+        locale={locale}
+        builtInQuests={quests}
+        onCatalogChange={refreshQuestCatalog}
+      />
 
       <div className="status-line">
         <span>ALGOQUEST_OS v0.1.0</span>
@@ -755,7 +774,7 @@ export default function Home() {
           </div>
         </div>
 
-        {(player?.role === "admin" || player?.role === "owner") && (
+        {canManage && (
           <div className="map-edit-toolbar">
             <span>
               {mapEditing ? copy.mapEditHint : "MAP_LAYOUT.cfg // READ ONLY"}
@@ -836,7 +855,7 @@ export default function Home() {
             }}
             onOpen={openQuest}
             editable={mapEditing}
-            canManage={player?.role === "admin" || player?.role === "owner"}
+            canManage={canManage}
             onPositionChange={moveMapQuest}
             onPositionCommit={commitMapQuest}
             onEdit={(quest) => {

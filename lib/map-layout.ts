@@ -3,15 +3,15 @@ import type { Quest } from "@/lib/quests";
 export type MapPosition = { x: number; y: number };
 
 const bounds = {
-  minX: 9,
-  maxX: 91,
-  minY: 12,
-  maxY: 88,
+  minX: 5,
+  maxX: 95,
+  minY: 7,
+  maxY: 93,
 };
 
 const minimumGap = {
-  x: 18,
-  y: 24,
+  x: 10,
+  y: 14,
 };
 
 function clamp(value: number, minimum: number, maximum: number) {

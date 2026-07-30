@@ -626,21 +626,6 @@ export function AccountPanel({
               )}
 
               <div className="account-switches">
-                {view === "profile" &&
-                  player &&
-                  ["admin", "owner"].includes(player.role) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpen(false);
-                        window.dispatchEvent(
-                          new CustomEvent("algoquest:open-admin"),
-                        );
-                      }}
-                    >
-                      [ {copy.controlDeck} ]
-                    </button>
-                  )}
                 {view !== "login" && (
                   <button type="button" onClick={() => selectView("login")}>
                     [ {copy.login} ]

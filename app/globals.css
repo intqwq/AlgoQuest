@@ -110,13 +110,23 @@ a {
   font-weight: 700;
 }
 
-.topbar nav a {
+.topbar nav a,
+.topbar nav button {
   padding: 9px 0;
+  border: 0;
   border-bottom: 2px solid transparent;
+  color: inherit;
+  background: transparent;
+}
+
+.topbar nav button {
+  cursor: pointer;
 }
 
 .topbar nav a:hover,
-.topbar nav a.active {
+.topbar nav a.active,
+.topbar nav button:hover,
+.topbar nav button:focus-visible {
   color: var(--green-dark);
   border-color: var(--green-dark);
 }
@@ -497,7 +507,7 @@ a {
 }
 
 .quest-map-viewport {
-  height: 590px;
+  height: 760px;
   position: relative;
   overflow: hidden;
   border: 2px solid var(--ink);
@@ -544,12 +554,12 @@ a {
 }
 
 .quest-map-canvas {
-  width: 1000px;
-  height: 600px;
+  width: 1800px;
+  height: 1050px;
   position: absolute;
   left: 50%;
   top: 0;
-  margin-left: -500px;
+  margin-left: -900px;
   transition: transform 180ms ease-out;
 }
 
@@ -3040,7 +3050,7 @@ footer a {
   }
 
   .quest-map-viewport {
-    height: 540px;
+    height: 640px;
   }
 
   .quest-map-canvas {
