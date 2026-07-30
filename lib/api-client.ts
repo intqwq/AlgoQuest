@@ -23,6 +23,45 @@ export type QuestProgress = {
   updatedAt: string;
 };
 
+export type QuestDraft = {
+  questId: string;
+  source: string;
+  updatedAt: string;
+};
+
+export type SaveSubmission = {
+  id: string;
+  judgeSubmissionId: string;
+  questId: string;
+  status: string;
+  verdict: string | null;
+  score: number;
+  source: string;
+  language: string;
+  mode: "sample" | "submit";
+  details: {
+    cases?: Array<{
+      id: string;
+      verdict: string;
+      timeMs: number;
+      memoryKb: number;
+    }>;
+    compilerOutput?: string;
+    error?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlayerSave = {
+  version: 2;
+  accountId: string;
+  updatedAt: string;
+  progress: QuestProgress[];
+  drafts: QuestDraft[];
+  submissions: SaveSubmission[];
+};
+
 export class AuthApiError extends Error {
   constructor(
     public code: string,
@@ -36,6 +75,7 @@ const apiBase = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1"
 ).replace(/\/$/, "");
 const sessionStorageKey = "algoquest.session-token";
+const pendingGuestSessionKey = "algoquest.pending-guest-session";
 let sessionPromise: Promise<string> | undefined;
 
 export function apiUrl(path: string) {
@@ -81,17 +121,27 @@ export async function authenticatedFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
 ) {
+  const existing = window.localStorage.getItem(sessionStorageKey);
+  if (!existing) {
+    return new Response(JSON.stringify({ error: "UNAUTHORIZED" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  }
   const request = async (token: string) => {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${token}`);
     return fetch(input, { ...init, headers });
   };
 
-  const response = await request(await ensureSession());
+  const response = await request(existing);
   if (response.status !== 401) return response;
 
   forgetSession();
-  return request(await ensureSession());
+  window.dispatchEvent(
+    new CustomEvent("algoquest:session", { detail: undefined }),
+  );
+  return response;
 }
 
 async function parseAuthResponse(response: Response) {
@@ -130,13 +180,41 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
   return response.json() as Promise<AuthConfig>;
 }
 
-export async function loadCurrentPlayer(): Promise<Player> {
-  const response = await authenticatedFetch(apiUrl("/me"), {
-    headers: { accept: "application/json" },
+export async function loadCurrentPlayer(): Promise<Player | undefined> {
+  const token = window.localStorage.getItem(sessionStorageKey);
+  if (!token) return undefined;
+  const response = await fetch(apiUrl("/me"), {
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+    },
   });
-  if (!response.ok) throw new Error(`Player API returned HTTP ${response.status}.`);
+  if (response.status === 401) {
+    forgetSession();
+    return undefined;
+  }
+  if (!response.ok) {
+    throw new Error(`Player API returned HTTP ${response.status}.`);
+  }
   const body = (await response.json()) as { player: Player };
   return body.player;
+}
+
+export async function requireCurrentPlayer(): Promise<Player> {
+  const player = await loadCurrentPlayer();
+  if (!player) throw new AuthApiError("UNAUTHORIZED", 401);
+  return player;
+}
+
+export async function loadPlayerSave(): Promise<PlayerSave> {
+  const response = await authenticatedFetch(apiUrl("/me/save"), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Save API returned HTTP ${response.status}.`);
+  }
+  const body = (await response.json()) as { save: PlayerSave };
+  return body.save;
 }
 
 export async function registerAccount(input: {
@@ -147,7 +225,7 @@ export async function registerAccount(input: {
 }) {
   await ensureSession();
   await authPost("/auth/register", input);
-  return loadCurrentPlayer();
+  return requireCurrentPlayer();
 }
 
 export async function loginAccount(input: {
@@ -155,8 +233,13 @@ export async function loginAccount(input: {
   password: string;
   turnstileToken: string;
 }) {
+  const previousToken = window.localStorage.getItem(sessionStorageKey);
   const body = await authPost("/auth/login", input);
-  return storeSession(body as SessionResponse);
+  const player = storeSession(body as SessionResponse);
+  if (previousToken && previousToken !== (body as SessionResponse).sessionToken) {
+    window.localStorage.setItem(pendingGuestSessionKey, previousToken);
+  }
+  return player;
 }
 
 export async function resendVerification(input: {
@@ -218,6 +301,7 @@ export async function logoutAccount() {
     }).catch(() => undefined);
   }
   forgetSession();
+  window.localStorage.removeItem(pendingGuestSessionKey);
 }
 
 export async function loadQuestProgress(): Promise<QuestProgress[]> {
@@ -243,4 +327,50 @@ export async function saveQuestProgress(questId: string, score: number) {
   if (!response.ok) {
     throw new Error(`Progress API returned HTTP ${response.status}.`);
   }
+}
+
+export async function saveQuestDraft(questId: string, source: string) {
+  const response = await authenticatedFetch(
+    apiUrl(`/me/drafts/${encodeURIComponent(questId)}`),
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Draft API returned HTTP ${response.status}.`);
+  }
+  const body = (await response.json()) as { draft: QuestDraft };
+  return body.draft;
+}
+
+export async function resolvePlayerSave(
+  choice: "local" | "cloud",
+  localSave: PlayerSave,
+) {
+  const guestToken = window.localStorage.getItem(pendingGuestSessionKey);
+  const response = await authenticatedFetch(apiUrl("/me/save/resolve"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      choice,
+      guestToken,
+      localSave: {
+        clearedQuestIds: localSave.progress
+          .filter((item) => item.status === "cleared")
+          .map((item) => item.questId),
+        drafts: localSave.drafts.map(({ questId, source }) => ({
+          questId,
+          source,
+        })),
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Save resolution returned HTTP ${response.status}.`);
+  }
+  window.localStorage.removeItem(pendingGuestSessionKey);
+  const body = (await response.json()) as { save: PlayerSave };
+  return body.save;
 }
