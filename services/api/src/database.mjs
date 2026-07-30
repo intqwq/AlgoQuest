@@ -1159,8 +1159,8 @@ export function createDatabase(databaseUrl) {
            (id, quest_id, author_id, kind, title, content, status,
             moderated_by, moderated_at)
          VALUES
-           ($1, $2, $3, $4, $5, $6, $7::varchar(16),
-            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN $3 END,
+           ($1, $2, $3::uuid, $4, $5, $6, $7::varchar(16),
+            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN $3::uuid END,
             CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN now() END)
          RETURNING id`,
         [id, questId, authorId, kind, title, content, status],
