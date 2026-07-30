@@ -1,0 +1,29 @@
+/* Keep Cloudflare Turnstile outside transformed or filtered animation layers. */
+.account-panel__body.page-transition {
+  animation: aq-account-panel-enter 180ms ease-out backwards !important;
+}
+
+.turnstile-frame {
+  min-height: 84px;
+  overflow: visible;
+}
+
+.turnstile-frame > div:first-child {
+  min-width: 0;
+}
+
+@keyframes aq-account-panel-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-panel__body.page-transition {
+    animation: none !important;
+  }
+}
