@@ -170,14 +170,39 @@ jobs:
 
           docker_test = Path('judge/test/docker.integration.test.mjs')
           text = docker_test.read_text(encoding='utf-8')
-          old = '  bool exposed = ifstream("/submission/manifest.json").good();\n'
-          new = (
-              '  bool exposed = ifstream("/submission/manifest.json").good();\n'
-              '  exposed = exposed || ofstream("/submission/contestant-write-probe").good();\n'
-          )
-          if old not in text:
-              raise SystemExit('Docker security test patch anchor not found')
-          docker_test.write_text(text.replace(old, new, 1), encoding='utf-8')
+          replacements = [
+              (
+                  '  bool exposed = ifstream("/submission/manifest.json").good();\n'
+                  '  ifstream commandLine',
+                  '  bool manifestExposed = ifstream("/submission/manifest.json").good();\n'
+                  '  bool writeExposed = ofstream("/submission/contestant-write-probe").good();\n'
+                  '  bool commandExposed = false;\n'
+                  '  ifstream commandLine',
+              ),
+              (
+                  '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) exposed = true;',
+                  '      if (current.find("/judge-data/jobs/") == 0 && ifstream(current + "/manifest.json").good()) commandExposed = true;',
+              ),
+              (
+                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
+                  '  char byte = 0;\n'
+                  '  if (supervisorInput.get(byte)) exposed = true;\n'
+                  '  cout << (exposed ? "LEAK" : "SAFE") << \'\\n\';',
+                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
+                  '  char byte = 0;\n'
+                  '  bool stdinExposed = static_cast<bool>(supervisorInput.get(byte));\n'
+                  '  if (manifestExposed) return 7;\n'
+                  '  if (commandExposed) for (;;) {}\n'
+                  '  if (stdinExposed) { for (int i = 0; i < 200000; ++i) cout << "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\\n"; }\n'
+                  '  if (writeExposed) { vector<char> memory(256ULL * 1024 * 1024); for (size_t i = 0; i < memory.size(); i += 4096) memory[i] = 1; }\n'
+                  '  cout << "SAFE" << \'\\n\';',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Docker security trace anchor not found: {old[:70]!r}')
+              text = text.replace(old, new, 1)
+          docker_test.write_text(text, encoding='utf-8')
           PY
 
       - name: Install web dependencies
