@@ -137,6 +137,32 @@ jobs:
                   raise SystemExit(f'Supervisor patch anchor not found: {old[:40]!r}')
               text = text.replace(old, new, 1)
           supervisor.write_text(text, encoding='utf-8')
+
+          docker_tests = Path('judge/test/docker.integration.test.mjs')
+          text = docker_tests.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '  `int main(){ volatile int *pointer = nullptr; *pointer = 7; }`,\n',
+                  '  `#include <cstdlib>\nint main(){ std::abort(); }`,\n',
+              ),
+              (
+                  'int main(){\n  bool exposed = ifstream("/submission/manifest.json").good();\n',
+                  'int main(){\n  string canary;\n  cin >> canary;\n  bool exposed = ifstream("/submission/manifest.json").good();\n',
+              ),
+              (
+                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
+                  '  char byte = 0;\n'
+                  '  if (supervisorInput.get(byte)) exposed = true;\n',
+                  '  ifstream supervisorInput("/proc/1/fd/0", ios::binary);\n'
+                  '  string supervisorPayload((istreambuf_iterator<char>(supervisorInput)), istreambuf_iterator<char>());\n'
+                  '  if (!canary.empty() && supervisorPayload.find(canary) != string::npos) exposed = true;\n',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Docker test patch anchor not found: {old[:40]!r}')
+              text = text.replace(old, new, 1)
+          docker_tests.write_text(text, encoding='utf-8')
           PY
 
       - name: Install web dependencies
