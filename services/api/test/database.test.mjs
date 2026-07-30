@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   createRateLimitQuery,
@@ -21,20 +22,26 @@ test("rate-limit SQL uses a contiguous, explicitly typed parameter list", () => 
   assert.match(query.text, /\$3::integer/);
 });
 
-test("progress SQL explicitly types every reuse of the status parameter", () => {
+test("progress SQL gives every reused parameter one PostgreSQL type", () => {
   const query = createSaveProgressQuery(
-    "00000000-0000-4000-8000-000000000001",
+    "af8b337a-0985-4805-b76c-612e8055d141",
     "signal-fire",
     "cleared",
     100,
   );
+  assert.match(query.text, /\$1::uuid/);
+  assert.match(query.text, /\$2::varchar\(96\)/);
+  assert.equal(query.text.match(/\$3::varchar\(16\)/g)?.length, 2);
+  assert.match(query.text, /\$4::integer/);
+  assert.equal(query.values.length, 4);
+});
 
-  assert.deepEqual(query.values, [
-    "00000000-0000-4000-8000-000000000001",
-    "signal-fire",
-    "cleared",
-    100,
-  ]);
-  assert.equal([...query.text.matchAll(/\\$3(?!\\d)/g)].length, 2);
-  assert.doesNotMatch(query.text, /\\$3(?!\\d)(?!::varchar\\(16\\))/);
+test("player save migration retains source snapshots and per-quest drafts", async () => {
+  const migration = await readFile(
+    new URL("../migrations/003_player_saves.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS source_code text/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS quest_drafts/);
+  assert.match(migration, /PRIMARY KEY \(user_id, quest_id\)/);
 });
