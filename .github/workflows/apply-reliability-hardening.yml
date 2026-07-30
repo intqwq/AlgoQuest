@@ -37,13 +37,90 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('judge/src/docker-runner.mjs')
-          text = path.read_text(encoding='utf-8')
-          old = '      "run",\n      "--name",'
-          new = '      "run",\n      "--interactive",\n      "--name",'
-          if old not in text:
-              raise SystemExit('Docker run argument anchor not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          docker_runner = Path('judge/src/docker-runner.mjs')
+          text = docker_runner.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '      "run",\n      "--name",',
+                  '      "run",\n      "--interactive",\n      "--name",',
+              ),
+              (
+                  '  await chmod(jobDir, 0o755);\n  await writeFile(sourcePath, source, { mode: 0o644 });\n  if (cacheHit) {',
+                  '  // Fresh compilation exports a cache candidate only after all contestant\n'
+                  '  // processes exit, so the temporary directory may be writable during that\n'
+                  '  // final supervisor-only step. Cached submissions remain read-only.\n'
+                  '  await chmod(jobDir, cacheHit ? 0o755 : 0o777);\n'
+                  '  await writeFile(sourcePath, source, { mode: 0o644 });\n'
+                  '  if (cacheHit) {',
+              ),
+              (
+                  '    if (\n      result.compiled &&\n      !cacheHit &&',
+                  '    if (!cacheHit) await chmod(jobDir, 0o755);\n'
+                  '    if (\n      result.compiled &&\n      !cacheHit &&',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Docker runner patch anchor not found: {old[:40]!r}')
+              text = text.replace(old, new, 1)
+          docker_runner.write_text(text, encoding='utf-8')
+
+          supervisor = Path('judge/runner/submission_runner.py')
+          text = supervisor.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
+                  '        os.chmod(BINARY_PATH, 0o555)\n'
+                  '        os.chmod(SUBMISSION_ROOT, 0o755)\n'
+                  '        return None\n',
+                  '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
+                  '        # The host materializes cached binaries read-only before the container\n'
+                  '        # starts. Do not chmod host-owned bind-mount files after capabilities\n'
+                  '        # have been dropped.\n'
+                  '        return None\n',
+              ),
+              (
+                  '    # The compiler runs as the unprivileged submission user. Copying the\n'
+                  '    # finished executable from the scratch tmpfs creates a root-owned file\n'
+                  '    # without granting CAP_CHOWN to the container supervisor.\n'
+                  '    shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)\n'
+                  '    os.chmod(BINARY_PATH, 0o555)\n'
+                  '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
+                  '    return None\n',
+                  '    # Keep the executable inside the isolated /work tmpfs while contestant\n'
+                  '    # code is running. A read-only cache export is created only after every\n'
+                  '    # contestant process has terminated, preventing cache poisoning.\n'
+                  '    os.chmod(COMPILED_BINARY_PATH, 0o555)\n'
+                  '    return None\n',
+              ),
+              (
+                  '        str(BINARY_PATH),\n    ]\n    memory_bytes',
+                  '        str(BINARY_PATH if manifest["cacheHit"] else COMPILED_BINARY_PATH),\n'
+                  '    ]\n    memory_bytes',
+              ),
+              (
+                  '    if compile_failure is not None:\n'
+                  '        emit({"type": "result", **compile_failure})\n'
+                  '        return\n',
+                  '    if compile_failure is not None:\n'
+                  '        emit({"type": "result", **compile_failure, "containerStarts": 1})\n'
+                  '        return\n',
+              ),
+              (
+                  '    emit(\n        {\n            "type": "result",\n',
+                  '    if not manifest["cacheHit"]:\n'
+                  '        # Export only after all unprivileged children are gone. The host will\n'
+                  '        # tighten the directory permissions before reading this cache candidate.\n'
+                  '        shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)\n'
+                  '        os.chmod(BINARY_PATH, 0o555)\n\n'
+                  '    emit(\n        {\n            "type": "result",\n',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Supervisor patch anchor not found: {old[:40]!r}')
+              text = text.replace(old, new, 1)
+          supervisor.write_text(text, encoding='utf-8')
           PY
 
       - name: Install web dependencies
