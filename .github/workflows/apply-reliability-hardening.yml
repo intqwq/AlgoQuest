@@ -34,6 +34,17 @@ jobs:
           cat .reliability-patch/part-* | base64 --decode > /tmp/reliability-patch.tgz
           echo 'b92e12fc5817ddf221fdf7393cfd2d2e7045734d2cb2cbc78c8193b28d7701ad  /tmp/reliability-patch.tgz' | sha256sum --check
           tar -xzf /tmp/reliability-patch.tgz
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('judge/src/docker-runner.mjs')
+          text = path.read_text(encoding='utf-8')
+          old = '      "run",\n      "--name",'
+          new = '      "run",\n      "--interactive",\n      "--name",'
+          if old not in text:
+              raise SystemExit('Docker run argument anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
 
       - name: Install web dependencies
         run: npm ci
