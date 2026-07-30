@@ -1,0 +1,264 @@
+name: Apply editorial and page transition changes
+
+on:
+  push:
+    branches:
+      - agent/editorial-rules-page-transitions
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply focused source changes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected one match in {path}, found {count}: {old!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "services/api/src/server.mjs",
+              '          status: moderator ? "published" : "pending",',
+              '          status: body.kind === "discussion" || moderator ? "published" : "pending",',
+          )
+
+          test_path = "services/api/test/database.test.mjs"
+          replace_once(
+              test_path,
+              'test("editorial routes enforce submission, clear and moderator requirements", async () => {',
+              'test("editorial routes publish discussions directly and moderate solutions", async () => {',
+          )
+          replace_once(
+              test_path,
+              '  assert.match(server, /moderator \\? "published" : "pending"/);',
+              '  assert.match(server, /body\\.kind === "discussion" \\|\\| moderator \\? "published" : "pending"/);\n  assert.doesNotMatch(server, /status: moderator \\? "published" : "pending"/);',
+          )
+          migration_test = '''test("discussion migration publishes legacy pending discussions", async () => {
+            const migration = await readFile(
+              new URL("../migrations/007_publish_pending_discussions.sql", import.meta.url),
+              "utf8",
+            );
+            assert.match(migration, /kind = 'discussion'/);
+            assert.match(migration, /status = 'pending'/);
+            assert.match(migration, /SET status = 'published'/);
+          });
+
+          '''
+          replace_once(
+              test_path,
+              'test("editorial routes publish discussions directly and moderate solutions", async () => {',
+              migration_test + 'test("editorial routes publish discussions directly and moderate solutions", async () => {',
+          )
+
+          migration = Path("services/api/migrations/007_publish_pending_discussions.sql")
+          if migration.exists():
+              raise SystemExit(f"Migration already exists: {migration}")
+          migration.write_text(
+              """UPDATE editorial_posts
+          SET status = 'published',
+              moderated_by = COALESCE(moderated_by, author_id),
+              moderated_at = COALESCE(moderated_at, now()),
+              updated_at = now()
+          WHERE kind = 'discussion'
+            AND status = 'pending';
+          """,
+              encoding="utf-8",
+          )
+
+          editorial = "components/editorial-panel.tsx"
+          replace_once(
+              editorial,
+              '    moderationHint: "Player posts appear after an administrator or site owner approves them.",',
+              '    discussionHint: "Discussions publish immediately after the submission requirement is met.",\n    solutionModerationHint: "Player solutions appear after an administrator or site owner approves them.",',
+          )
+          replace_once(
+              editorial,
+              '    moderationHint: "普通玩家发布的内容需由管理员或站长审核后公开。",',
+              '    discussionHint: "满足提交条件后，讨论会立即公开，无需审核。",\n    solutionModerationHint: "普通玩家发布的题解需由管理员或站长审核后公开。",',
+          )
+          replace_once(
+              editorial,
+              '    moderationHint: "プレイヤーの投稿は管理者またはサイトオーナーの承認後に公開されます。",',
+              '    discussionHint: "提出条件を満たしたディスカッションは審査なしですぐ公開されます。",\n    solutionModerationHint: "プレイヤーの解説は管理者またはサイトオーナーの承認後に公開されます。",',
+          )
+          replace_once(
+              editorial,
+              '        <div className="editorial-body">',
+              '        <div key={kind} className="editorial-body page-transition">',
+          )
+          replace_once(
+              editorial,
+              '            <p>{eligibility.directPublish ? copy.directHint : copy.moderationHint}</p>',
+              '''            <p>
+              {kind === "discussion"
+                ? copy.discussionHint
+                : eligibility.directPublish
+                  ? copy.directHint
+                  : copy.solutionModerationHint}
+            </p>''',
+          )
+          replace_once(
+              editorial,
+              '              [ {eligibility.directPublish ? copy.publish : copy.submitReview} ]',
+              '''              [ {kind === "discussion" || eligibility.directPublish
+                ? copy.publish
+                : copy.submitReview} ]''',
+          )
+
+          replace_once(
+              "components/account-panel.tsx",
+              '            <div className="account-panel__body">',
+              '            <div key={view} className="account-panel__body page-transition">',
+          )
+
+          css = Path("app/globals.css")
+          css_text = css.read_text(encoding="utf-8")
+          marker = "/* Unified page transitions */"
+          if marker in css_text:
+              raise SystemExit("Transition block already exists")
+          css.write_text(
+              css_text
+              + '''
+
+          /* Unified page transitions */
+          .site-shell > section,
+          .page-transition,
+          .admin-content {
+            animation: aq-page-enter 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+          }
+
+          .account-overlay,
+          .admin-overlay,
+          .editorial-overlay,
+          .save-conflict-overlay,
+          .ac-overlay {
+            animation: aq-backdrop-enter 180ms ease-out both;
+          }
+
+          .account-panel,
+          .admin-console,
+          .editorial-panel,
+          .save-conflict-panel,
+          .ac-dialog {
+            transform-origin: 50% 42%;
+            animation: aq-panel-enter 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+          }
+
+          .editorial-post,
+          .managed-player,
+          .moderation-card {
+            animation: aq-item-enter 260ms ease-out both;
+          }
+
+          @keyframes aq-page-enter {
+            from {
+              opacity: 0;
+              transform: translateY(14px);
+              filter: blur(3px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+              filter: blur(0);
+            }
+          }
+
+          @keyframes aq-backdrop-enter {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+
+          @keyframes aq-panel-enter {
+            from {
+              opacity: 0;
+              transform: translateY(18px) scale(0.975);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+            }
+          }
+
+          @keyframes aq-item-enter {
+            from {
+              opacity: 0;
+              transform: translateX(-8px);
+            }
+            to {
+              opacity: 1;
+              transform: translateX(0);
+            }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+
+            .site-shell > section,
+            .page-transition,
+            .admin-content,
+            .account-overlay,
+            .admin-overlay,
+            .editorial-overlay,
+            .save-conflict-overlay,
+            .ac-overlay,
+            .account-panel,
+            .admin-console,
+            .editorial-panel,
+            .save-conflict-panel,
+            .ac-dialog,
+            .editorial-post,
+            .managed-player,
+            .moderation-card {
+              animation: none !important;
+              transition: none !important;
+            }
+          }
+          ''',
+              encoding="utf-8",
+          )
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Test Core API
+        run: |
+          npm --prefix services/api install --ignore-scripts
+          npm --prefix services/api test
+
+      - name: Lint web application
+        run: |
+          npm ci --ignore-scripts
+          npm run lint
+
+      - name: Commit source changes and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/one-shot-editorial-transitions.yml
+          git config user.name "chatgpt-github-agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/api/src/server.mjs \
+                  services/api/test/database.test.mjs \
+                  services/api/migrations/007_publish_pending_discussions.sql \
+                  components/editorial-panel.tsx \
+                  components/account-panel.tsx \
+                  app/globals.css \
+                  .github/workflows/one-shot-editorial-transitions.yml
+          git commit -m "Publish discussions directly and animate page transitions"
+          git push origin HEAD:${GITHUB_REF_NAME}
