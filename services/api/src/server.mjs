@@ -6,6 +6,7 @@ import {
   hashPassword,
   normalizeEmail,
   passwordPolicyError,
+  playableAccountError,
   verifyPassword,
 } from "./auth.mjs";
 import { createDatabase, migrateWithRetry } from "./database.mjs";
@@ -158,6 +159,32 @@ function sessionPayload(session) {
     sessionToken: session.token,
     player: session.player,
   };
+}
+
+function requirePlayableAccount(player) {
+  const error = playableAccountError(player);
+  if (error) throw new ApiError(403, error);
+}
+
+function validQuestId(value) {
+  return typeof value === "string" && /^[a-z0-9-]{1,96}$/.test(value);
+}
+
+function parseLocalDrafts(value) {
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new ApiError(400, "INVALID_SAVE");
+  }
+  return value.map((draft) => {
+    if (
+      !draft ||
+      !validQuestId(draft.questId) ||
+      typeof draft.source !== "string" ||
+      draft.source.length > 64 * 1024
+    ) {
+      throw new ApiError(400, "INVALID_SAVE");
+    }
+    return { questId: draft.questId, source: draft.source };
+  });
 }
 
 function judgeHeaders(userId, contentType) {
@@ -332,11 +359,7 @@ const server = http.createServer(async (request, response) => {
       if (!account.emailVerified) {
         throw new ApiError(403, "EMAIL_NOT_VERIFIED");
       }
-      const currentPlayer = await authenticate(request);
-      const session = await database.loginAccount(
-        account.id,
-        currentPlayer?.isGuest ? currentPlayer.id : undefined,
-      );
+      const session = await database.loginAccount(account.id);
       return json(response, 200, sessionPayload(session));
     }
 
@@ -412,8 +435,82 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/v1/me/progress") {
+      requirePlayableAccount(player);
       return json(response, 200, {
         progress: await database.listProgress(player.id),
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/me/save") {
+      requirePlayableAccount(player);
+      return json(response, 200, {
+        save: await database.getPlayerSave(player.id),
+      });
+    }
+
+    const draftMatch = url.pathname.match(
+      /^\/v1\/me\/drafts\/([a-z0-9-]{1,96})$/,
+    );
+    if (request.method === "PUT" && draftMatch) {
+      requirePlayableAccount(player);
+      const body = await readJson(request);
+      if (
+        typeof body.source !== "string" ||
+        body.source.length > 64 * 1024
+      ) {
+        throw new ApiError(400, "INVALID_DRAFT");
+      }
+      return json(response, 200, {
+        draft: await database.saveDraft(
+          player.id,
+          draftMatch[1],
+          body.source,
+        ),
+      });
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/v1/me/save/resolve"
+    ) {
+      requirePlayableAccount(player);
+      const body = await readJson(request, 1024 * 1024);
+      if (body.choice !== "local" && body.choice !== "cloud") {
+        throw new ApiError(400, "INVALID_SAVE_CHOICE");
+      }
+
+      let guest;
+      if (typeof body.guestToken === "string" && body.guestToken) {
+        guest = await database.authenticate(body.guestToken);
+        if (guest && !guest.isGuest) guest = undefined;
+      }
+
+      if (body.choice === "local") {
+        if (guest) {
+          await database.transferGuestSave(guest.id, player.id);
+        }
+        const drafts = parseLocalDrafts(body.localSave?.drafts ?? []);
+        await database.replaceDrafts(player.id, drafts);
+        const clearedQuestIds = Array.isArray(
+          body.localSave?.clearedQuestIds,
+        )
+          ? [
+              ...new Set(
+                body.localSave.clearedQuestIds.filter(validQuestId),
+              ),
+            ].slice(0, 64)
+          : [];
+        for (const questId of clearedQuestIds) {
+          if (await database.hasAcceptedSubmission(player.id, questId)) {
+            await database.saveProgress(player.id, questId, "cleared", 100);
+          }
+        }
+      } else if (guest) {
+        await database.discardGuestSave(guest.id);
+      }
+
+      return json(response, 200, {
+        save: await database.getPlayerSave(player.id),
       });
     }
 
@@ -421,6 +518,7 @@ const server = http.createServer(async (request, response) => {
       /^\/v1\/me\/progress\/([a-z0-9-]{1,96})$/,
     );
     if (request.method === "PUT" && progressMatch) {
+      requirePlayableAccount(player);
       const body = await readJson(request, 4 * 1024);
       const status = body.status === "cleared" ? "cleared" : "started";
       const score = Math.max(0, Math.min(100, Number(body.score ?? 0)));
@@ -445,6 +543,7 @@ const server = http.createServer(async (request, response) => {
       request.method === "POST" &&
       url.pathname === "/v1/judge/submissions"
     ) {
+      requirePlayableAccount(player);
       const body = await readJson(request);
       const missing = missingPrerequisites(
         body.questId,
@@ -471,6 +570,9 @@ const server = http.createServer(async (request, response) => {
           result.submission.id,
           body.questId,
           result.submission.status,
+          body.source,
+          body.language,
+          body.mode,
         );
       }
       const headers = {};
@@ -483,6 +585,7 @@ const server = http.createServer(async (request, response) => {
       /^\/v1\/judge\/submissions\/([0-9a-f-]+)$/,
     );
     if (request.method === "GET" && submissionMatch) {
+      requirePlayableAccount(player);
       const record = await database.findSubmission(
         player.id,
         submissionMatch[1],
