@@ -49,6 +49,12 @@ export function passwordPolicyError(value) {
   return undefined;
 }
 
+export function playableAccountError(player) {
+  if (!player || player.isGuest) return "ACCOUNT_REQUIRED";
+  if (!player.emailVerified) return "EMAIL_NOT_VERIFIED";
+  return undefined;
+}
+
 export async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
   const derived = await scrypt(password, salt, passwordHashLength, scryptParameters);
