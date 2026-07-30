@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
+import "./turnstile-fix.css";
 
 export const metadata: Metadata = {
   title: "AlgoQuest // Learn. Code. Conquer.",
@@ -21,7 +23,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <head>
+        <link rel="preconnect" href="https://challenges.cloudflare.com" />
+      </head>
+      <body>
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+          data-algoquest-turnstile="true"
+        />
+        {children}
+      </body>
     </html>
   );
 }
