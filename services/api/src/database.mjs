@@ -59,6 +59,52 @@ export function createSaveProgressQuery(userId, questId, status, score) {
   };
 }
 
+export function createEditorialListQuery({
+  questId,
+  viewerId,
+  includeModeration = false,
+  status,
+} = {}) {
+  const values = [];
+  const conditions = [];
+  if (questId) {
+    values.push(questId);
+    conditions.push(`p.quest_id = $${values.length}`);
+  }
+  if (status) {
+    values.push(status);
+    conditions.push(`p.status = $${values.length}`);
+  } else if (!includeModeration) {
+    values.push(viewerId);
+    conditions.push(
+      `(p.status = 'published' OR p.author_id = $${values.length})`,
+    );
+  }
+  return {
+    text: `SELECT
+       p.id,
+       p.quest_id,
+       p.kind,
+       p.title,
+       p.content,
+       p.status,
+       p.created_at,
+       p.updated_at,
+       p.moderated_at,
+       u.id AS author_id,
+       u.display_name AS author_name,
+       u.role AS author_role
+     FROM editorial_posts p
+     JOIN users u ON u.id = p.author_id
+     ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+     ORDER BY
+       CASE p.status WHEN 'pending' THEN 0 WHEN 'published' THEN 1 ELSE 2 END,
+       p.created_at DESC
+     LIMIT 200`,
+    values,
+  };
+}
+
 export function createDatabase(databaseUrl) {
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -1089,41 +1135,13 @@ export function createDatabase(databaseUrl) {
       includeModeration = false,
       status,
     } = {}) {
-      const values = [viewerId];
-      const conditions = [];
-      if (questId) {
-        values.push(questId);
-        conditions.push(`p.quest_id = $${values.length}`);
-      }
-      if (status) {
-        values.push(status);
-        conditions.push(`p.status = $${values.length}`);
-      } else if (!includeModeration) {
-        conditions.push("(p.status = 'published' OR p.author_id = $1)");
-      }
-      const result = await pool.query(
-        `SELECT
-           p.id,
-           p.quest_id,
-           p.kind,
-           p.title,
-           p.content,
-           p.status,
-           p.created_at,
-           p.updated_at,
-           p.moderated_at,
-           u.id AS author_id,
-           u.display_name AS author_name,
-           u.role AS author_role
-         FROM editorial_posts p
-         JOIN users u ON u.id = p.author_id
-         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
-         ORDER BY
-           CASE p.status WHEN 'pending' THEN 0 WHEN 'published' THEN 1 ELSE 2 END,
-           p.created_at DESC
-         LIMIT 200`,
-        values,
-      );
+      const query = createEditorialListQuery({
+        questId,
+        viewerId,
+        includeModeration,
+        status,
+      });
+      const result = await pool.query(query.text, query.values);
       return result.rows.map(mapEditorialPost);
     },
 

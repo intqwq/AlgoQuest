@@ -2,10 +2,48 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  createEditorialListQuery,
   createRateLimitQuery,
   createSaveProgressQuery,
   mapPlayer,
 } from "../src/database.mjs";
+
+test("editorial list SQL never leaves unused PostgreSQL parameters", () => {
+  const player = createEditorialListQuery({
+    questId: "signal-fire",
+    viewerId: "af8b337a-0985-4805-b76c-612e8055d141",
+  });
+  assert.deepEqual(player.values, [
+    "signal-fire",
+    "af8b337a-0985-4805-b76c-612e8055d141",
+  ]);
+  assert.match(player.text, /p\.quest_id = \$1/);
+  assert.match(player.text, /p\.author_id = \$2/);
+
+  const moderatorQuest = createEditorialListQuery({
+    questId: "signal-fire",
+    viewerId: "unused",
+    includeModeration: true,
+  });
+  assert.deepEqual(moderatorQuest.values, ["signal-fire"]);
+  assert.match(moderatorQuest.text, /p\.quest_id = \$1/);
+  assert.doesNotMatch(moderatorQuest.text, /\$2/);
+
+  const queue = createEditorialListQuery({
+    viewerId: "unused",
+    includeModeration: true,
+    status: "pending",
+  });
+  assert.deepEqual(queue.values, ["pending"]);
+  assert.match(queue.text, /p\.status = \$1/);
+
+  const byId = createEditorialListQuery({
+    viewerId: "unused",
+    includeModeration: true,
+  });
+  assert.deepEqual(byId.values, []);
+  assert.doesNotMatch(byId.text, /\$\d+/);
+});
 
 test("rate-limit SQL uses a contiguous, explicitly typed parameter list", () => {
   const query = createRateLimitQuery("guest_session:ip", "203.0.113.8", 3600);
