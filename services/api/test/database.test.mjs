@@ -157,13 +157,24 @@ test("editorial migration separates discussions, solutions and moderation state"
   assert.match(migration, /moderated_by uuid REFERENCES users/);
 });
 
-test("editorial routes enforce submission, clear and moderator requirements", async () => {
+test("discussion migration publishes legacy pending discussions", async () => {
+  const migration = await readFile(
+    new URL("../migrations/007_publish_pending_discussions.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /kind = 'discussion'/);
+  assert.match(migration, /status = 'pending'/);
+  assert.match(migration, /SET status = 'published'/);
+});
+
+test("editorial routes publish discussions directly and moderate solutions", async () => {
   const server = await readFile(
     new URL("../src/server.mjs", import.meta.url),
     "utf8",
   );
   assert.match(server, /QUEST_SUBMISSION_REQUIRED/);
   assert.match(server, /QUEST_CLEAR_REQUIRED/);
-  assert.match(server, /moderator \? "published" : "pending"/);
+  assert.match(server, /body\.kind === "discussion" \|\| moderator \? "published" : "pending"/);
+  assert.doesNotMatch(server, /status: moderator \? "published" : "pending"/);
   assert.match(server, /requireAdmin\(player\)[\s\S]*moderateEditorialPost/);
 });

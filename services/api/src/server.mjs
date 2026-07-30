@@ -674,7 +674,7 @@ const server = http.createServer(async (request, response) => {
           kind: body.kind,
           title,
           content,
-          status: moderator ? "published" : "pending",
+          status: body.kind === "discussion" || moderator ? "published" : "pending",
         });
         return json(response, 201, { post });
       }
