@@ -1,7 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { apiUrl, authenticatedFetch } from "@/lib/api-client";
+import Editor, { loader, OnMount } from "@monaco-editor/react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  apiUrl,
+  authenticatedFetch,
+  SaveSubmission,
+} from "@/lib/api-client";
 import { Quest } from "@/lib/quests";
 
 type Verdict = "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
@@ -22,6 +27,7 @@ type CaseResult = {
 };
 
 type JudgeResponse = {
+  submissionId: string;
   verdict: Verdict;
   compilerOutput?: string;
   error?: string;
@@ -95,6 +101,8 @@ async function requestJudge(
       SUBMISSION_COOLDOWN: `Submission cooldown: ${Math.ceil((body.retryAfterMs ?? 1000) / 1000)}s remaining.`,
       ACTIVE_SUBMISSION: "This player already has a submission in flight.",
       QUEST_LOCKED: "Clear the prerequisite mission before entering this quest.",
+      ACCOUNT_REQUIRED: "Log in with a verified player account to use the judge.",
+      EMAIL_NOT_VERIFIED: "Verify your email before entering a mission.",
     };
     throw new JudgeRequestError(
       body.error ?? "JUDGE_FAILURE",
@@ -157,6 +165,7 @@ async function requestJudge(
     );
   }
   return {
+    submissionId: submission.id,
     verdict: submission.verdict,
     compilerOutput: submission.compilerOutput,
     error: submission.error,
@@ -167,13 +176,21 @@ async function requestJudge(
 export function MissionTerminal({
   quest,
   nextQuestTitle,
+  initialCode,
+  history,
   onExit,
   onComplete,
+  onDraftChange,
+  onSubmission,
 }: {
   quest: Quest;
   nextQuestTitle?: string;
+  initialCode?: string;
+  history: SaveSubmission[];
   onExit: () => void;
   onComplete: (questId: string, score: number) => void;
+  onDraftChange: (questId: string, source: string) => void;
+  onSubmission: (submission: SaveSubmission) => void;
 }) {
   const problem = quest.problem;
   if (!problem) {
@@ -190,18 +207,63 @@ export function MissionTerminal({
   const emptyResults = () =>
     caseIds.map((id) => ({ id, verdict: "WAIT" as const }));
 
-  const [code, setCode] = useState(problem.starterCode);
+  const [code, setCode] = useState(initialCode ?? problem.starterCode);
   const [judgeState, setJudgeState] = useState<JudgeState>("idle");
   const [results, setResults] = useState<CaseResult[]>(emptyResults);
   const [consoleText, setConsoleText] = useState(
     "$ judge --awaiting-source\n> Edit main.cpp, then run the sample.",
   );
   const [hintOpen, setHintOpen] = useState(false);
+  const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const [editorReady, setEditorReady] = useState(false);
 
-  const lineNumbers = useMemo(
-    () => code.split("\n").map((_, index) => index + 1),
-    [code],
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      import("monaco-editor"),
+      import("monaco-editor/editor/editor.worker?worker"),
+    ]).then(([monaco, workerModule]) => {
+      const EditorWorker = workerModule.default;
+      (
+        window as typeof window & {
+          MonacoEnvironment?: { getWorker: () => Worker };
+        }
+      ).MonacoEnvironment = {
+        getWorker: () => new EditorWorker(),
+      };
+      loader.config({ monaco });
+      if (active) setEditorReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      onDraftChange(quest.id, code);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [code, onDraftChange, quest.id]);
+
+  const questHistory = useMemo(
+    () => history.filter((item) => item.questId === quest.id).slice(0, 8),
+    [history, quest.id],
   );
+
+  const handleEditorMount: OnMount = (editor) => {
+    const position = editor.getPosition();
+    if (position) {
+      setCursor({ line: position.lineNumber, column: position.column });
+    }
+    editor.onDidChangeCursorPosition((event) => {
+      setCursor({
+        line: event.position.lineNumber,
+        column: event.position.column,
+      });
+    });
+    editor.focus();
+  };
 
   const formatFailure = (response: JudgeResponse) => {
     if (response.verdict === "CE") {
@@ -286,6 +348,27 @@ export function MissionTerminal({
     );
   };
 
+  const recordSubmission = (
+    response: JudgeResponse,
+    mode: "sample" | "submit",
+  ) => {
+    const now = new Date().toISOString();
+    onSubmission({
+      id: response.submissionId,
+      judgeSubmissionId: response.submissionId,
+      questId: quest.id,
+      status: "DONE",
+      verdict: response.verdict,
+      score: response.verdict === "AC" ? 100 : 0,
+      source: code,
+      language: "cpp14",
+      mode,
+      details: response,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
   const runSample = async () => {
     if (["queued", "compiling", "running"].includes(judgeState)) return;
     setJudgeState("queued");
@@ -334,6 +417,7 @@ export function MissionTerminal({
         setConsoleText(formatFailure(response));
         setJudgeState("failed");
       }
+      recordSubmission(response, "sample");
     } catch (error) {
       handleRequestError(error);
     }
@@ -381,6 +465,7 @@ export function MissionTerminal({
         setJudgeState("failed");
         setConsoleText(formatFailure(response));
       }
+      recordSubmission(response, "submit");
     } catch (error) {
       handleRequestError(error);
     }
@@ -472,26 +557,59 @@ export function MissionTerminal({
         <section className="editor-pane" aria-label="Code editor">
           <div className="editor-header">
             <span>● main.cpp</span>
-            <span>GNU C++14 // UTF-8</span>
+            <span>
+              Ln {cursor.line}, Col {cursor.column}
+              {" // Spaces: 4 // UTF-8"}
+            </span>
           </div>
           <div className="editor-wrap">
-            <div className="line-numbers" aria-hidden="true">
-              {lineNumbers.map((line) => (
-                <span key={line}>{String(line).padStart(2, "0")}</span>
-              ))}
-            </div>
-            <textarea
-              aria-label="C++ solution"
-              spellCheck={false}
+            {editorReady ? (
+              <Editor
+              height="100%"
+              language="cpp"
+              theme="vs-dark"
               value={code}
-              onChange={(event) => {
-                setCode(event.target.value);
+              onMount={handleEditorMount}
+              onChange={(value) => {
+                setCode(value ?? "");
                 if (judgeState !== "idle") {
                   setJudgeState("idle");
                   setResults(emptyResults());
                 }
               }}
-            />
+              loading={<div className="editor-loading">BOOTING EDITOR...</div>}
+              options={{
+                automaticLayout: true,
+                autoIndent: "full",
+                bracketPairColorization: { enabled: true },
+                cursorBlinking: "smooth",
+                cursorSmoothCaretAnimation: "on",
+                fontFamily:
+                  '"Cascadia Code", "Cascadia Mono", Consolas, monospace',
+                fontLigatures: true,
+                fontSize: 14,
+                formatOnPaste: true,
+                formatOnType: true,
+                guides: {
+                  bracketPairs: true,
+                  bracketPairsHorizontal: "active",
+                  highlightActiveBracketPair: true,
+                  indentation: true,
+                },
+                insertSpaces: true,
+                matchBrackets: "always",
+                minimap: { enabled: true, maxColumn: 80, scale: 1 },
+                padding: { top: 14, bottom: 14 },
+                renderLineHighlight: "all",
+                roundedSelection: false,
+                scrollBeyondLastLine: false,
+                smoothScrolling: true,
+                tabSize: 4,
+              }}
+              />
+            ) : (
+              <div className="editor-loading">BOOTING EDITOR...</div>
+            )}
           </div>
           <div className="console-pane" aria-live="polite">
             <div className="console-heading">
@@ -545,6 +663,39 @@ export function MissionTerminal({
             </p>
           </div>
 
+          <div className="submission-history">
+            <div className="submission-history__title">
+              <span>SUBMISSION HISTORY</span>
+              <strong>{questHistory.length.toString().padStart(2, "0")}</strong>
+            </div>
+            {questHistory.length ? (
+              questHistory.map((item) => (
+                <button
+                  type="button"
+                  key={item.judgeSubmissionId}
+                  onClick={() => {
+                    setCode(item.source);
+                    setConsoleText(
+                      `$ history --restore ${item.judgeSubmissionId}\n[ ${item.verdict ?? item.status} ] ${new Date(item.createdAt).toLocaleString()}\n> Source restored to main.cpp. Submit it again only when you are ready.`,
+                    );
+                  }}
+                >
+                  <span>{new Date(item.createdAt).toLocaleString()}</span>
+                  <strong
+                    className={`verdict verdict--${(
+                      item.verdict ?? "wait"
+                    ).toLowerCase()}`}
+                  >
+                    {item.verdict ?? item.status}
+                  </strong>
+                  <small>{item.mode.toUpperCase()}</small>
+                </button>
+              ))
+            ) : (
+              <p>NO EVALUATIONS RECORDED FOR THIS QUEST.</p>
+            )}
+          </div>
+
           {judgeState === "accepted" && (
             <div className="reward-card">
               <span>QUEST CLEARED</span>
@@ -561,7 +712,7 @@ export function MissionTerminal({
       </div>
 
       <div className="mission-actions">
-        <span>autosave: device + account progress</span>
+        <span>autosave: code + evaluations // device + cloud</span>
         <div>
           <button className="sample-button" onClick={runSample}>
             &gt; RUN SAMPLE
