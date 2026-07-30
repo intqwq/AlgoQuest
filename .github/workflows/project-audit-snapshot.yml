@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/project-audit-snapshot
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
