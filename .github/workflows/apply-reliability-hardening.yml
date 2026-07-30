@@ -67,54 +67,52 @@ jobs:
                   '    hostJobDir = path.join(mountpoint, "jobs", path.basename(jobDir));\n'
                   '  }\n'
                   '  const runnerJobDir = "/submission";\n'
-                  '  const jobMount = `type=bind,src=${hostJobDir},dst=/submission,readonly`;\n'
-                  '  const exportMount = `type=bind,src=${path.join(hostJobDir, "export")},dst=/export`;\n',
+                  '  const jobMount = `type=bind,src=${hostJobDir},dst=/submission,readonly`;\n',
               ),
               (
-                  '      "--mount",\n      jobMount,\n      IMAGE,',
-                  '      "--mount",\n      jobMount,\n      "--mount",\n      exportMount,\n      IMAGE,',
-              ),
-              (
-                  '  const binaryPath = path.join(jobDir, "main");\n'
-                  '  const cachedBinary = path.join(CACHE_ROOT, cacheKey(source));',
-                  '  const binaryPath = path.join(jobDir, "main");\n'
-                  '  const exportDir = path.join(jobDir, "export");\n'
-                  '  const exportedBinary = path.join(exportDir, "main");\n'
-                  '  const cachedBinary = path.join(CACHE_ROOT, cacheKey(source));',
+                  '  const inspection = await docker([\n'
+                  '    "inspect",\n'
+                  '    name,\n'
+                  '    "--format",\n'
+                  '    "{{.State.OOMKilled}}",\n'
+                  '  ]);\n'
+                  '  await forceRemove(name);\n',
+                  '  const inspection = await docker([\n'
+                  '    "inspect",\n'
+                  '    name,\n'
+                  '    "--format",\n'
+                  '    "{{.State.OOMKilled}}",\n'
+                  '  ]);\n'
+                  '  if (finalResult?.compiled && !manifest.cacheHit) {\n'
+                  '    // The compiled binary stays in the private /work tmpfs while contestant\n'
+                  '    // code runs. Export it only after the container has stopped, so no writable\n'
+                  '    // host path is ever visible to submitted code. Cache export is optional.\n'
+                  '    await docker([\n'
+                  '      "cp",\n'
+                  '      `${name}:/work/compile/main`,\n'
+                  '      path.join(hostJobDir, "main"),\n'
+                  '    ]);\n'
+                  '  }\n'
+                  '  await forceRemove(name);\n',
               ),
               (
                   '  await chmod(jobDir, 0o755);\n'
                   '  await writeFile(sourcePath, source, { mode: 0o644 });\n'
                   '  if (cacheHit) {',
                   '  await chmod(jobDir, 0o755);\n'
-                  '  await mkdir(exportDir, { mode: 0o700 });\n'
-                  '  await chmod(exportDir, 0o700);\n'
                   '  await writeFile(sourcePath, source, { mode: 0o444 });\n'
                   '  if (cacheHit) {',
-              ),
-              (
-                  '      (await fileExists(binaryPath))\n'
-                  '    ) {\n'
-                  '      await storeCache(binaryPath, cachedBinary);',
-                  '      (await fileExists(exportedBinary))\n'
-                  '    ) {\n'
-                  '      await storeCache(exportedBinary, cachedBinary);',
               ),
           ]
           for old, new in replacements:
               if old not in text:
-                  raise SystemExit(f'Docker runner patch anchor not found: {old[:60]!r}')
+                  raise SystemExit(f'Docker runner patch anchor not found: {old[:70]!r}')
               text = text.replace(old, new, 1)
           docker_runner.write_text(text, encoding='utf-8')
 
           supervisor = Path('judge/runner/submission_runner.py')
           text = supervisor.read_text(encoding='utf-8')
           replacements = [
-              (
-                  'COMPILED_BINARY_PATH = COMPILE_ROOT / "main"\n',
-                  'COMPILED_BINARY_PATH = COMPILE_ROOT / "main"\n'
-                  'EXPORT_BINARY_PATH = Path("/export/main")\n',
-              ),
               (
                   '    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)\n'
                   '    sys.stdin.close()\n',
@@ -134,8 +132,8 @@ jobs:
                   '        os.chmod(SUBMISSION_ROOT, 0o755)\n'
                   '        return None\n',
                   '    if manifest["cacheHit"] and BINARY_PATH.exists():\n'
-                  '        # The host materializes cached binaries read-only before the container\n'
-                  '        # starts. Do not mutate the read-only contestant mount.\n'
+                  '        # The host materializes cached binaries before the container starts.\n'
+                  '        # Do not mutate the read-only contestant mount.\n'
                   '        return None\n',
               ),
               (
@@ -146,8 +144,8 @@ jobs:
                   '    os.chmod(BINARY_PATH, 0o555)\n'
                   '    os.chmod(SUBMISSION_ROOT, 0o755)\n'
                   '    return None\n',
-                  '    # Keep the compiler-owned executable inside the isolated /work tmpfs while\n'
-                  '    # contestant code is running. Cache export happens only after all cases.\n'
+                  '    # Keep the compiler-owned executable inside the isolated /work tmpfs.\n'
+                  '    # The Judge exports a cache candidate only after the container stops.\n'
                   '    return None\n',
               ),
               (
@@ -163,19 +161,10 @@ jobs:
                   '        emit({"type": "result", **compile_failure, "containerStarts": 1})\n'
                   '        return\n',
               ),
-              (
-                  '    emit(\n        {\n            "type": "result",\n',
-                  '    if not manifest["cacheHit"]:\n'
-                  '        # /export is a separate root-only mount. Contestant UID 10001 cannot\n'
-                  '        # write to it, so the cached binary cannot be poisoned by submitted code.\n'
-                  '        shutil.copyfile(COMPILED_BINARY_PATH, EXPORT_BINARY_PATH)\n'
-                  '        os.chmod(EXPORT_BINARY_PATH, 0o555)\n\n'
-                  '    emit(\n        {\n            "type": "result",\n',
-              ),
           ]
           for old, new in replacements:
               if old not in text:
-                  raise SystemExit(f'Supervisor patch anchor not found: {old[:60]!r}')
+                  raise SystemExit(f'Supervisor patch anchor not found: {old[:70]!r}')
               text = text.replace(old, new, 1)
           supervisor.write_text(text, encoding='utf-8')
 
@@ -185,7 +174,6 @@ jobs:
           new = (
               '  bool exposed = ifstream("/submission/manifest.json").good();\n'
               '  exposed = exposed || ofstream("/submission/contestant-write-probe").good();\n'
-              '  exposed = exposed || ofstream("/export/contestant-write-probe").good();\n'
           )
           if old not in text:
               raise SystemExit('Docker security test patch anchor not found')
