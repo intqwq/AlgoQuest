@@ -308,24 +308,10 @@ export function createDatabase(databaseUrl) {
       };
     },
 
-    async loginAccount(userId, anonymousUserId) {
+    async loginAccount(userId) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        if (anonymousUserId && anonymousUserId !== userId) {
-          const guest = await client.query(
-            "SELECT id FROM users WHERE id = $1 AND is_guest = true FOR UPDATE",
-            [anonymousUserId],
-          );
-          if (guest.rowCount) {
-            await mergeGuestProgress(client, anonymousUserId, userId);
-            await client.query(
-              "UPDATE submissions SET user_id = $2 WHERE user_id = $1",
-              [anonymousUserId, userId],
-            );
-            await client.query("DELETE FROM users WHERE id = $1", [anonymousUserId]);
-          }
-        }
         const user = await client.query(
           `UPDATE users
               SET last_login_at = now(), updated_at = now()
@@ -480,13 +466,33 @@ export function createDatabase(databaseUrl) {
       return Boolean(result.rowCount);
     },
 
-    async createSubmission(userId, judgeSubmissionId, questId, status) {
+    async createSubmission(
+      userId,
+      judgeSubmissionId,
+      questId,
+      status,
+      sourceCode,
+      language,
+      mode,
+    ) {
       const id = crypto.randomUUID();
       await pool.query(
         `INSERT INTO submissions
-           (id, judge_submission_id, user_id, quest_id, status)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, judgeSubmissionId, userId, questId, status],
+           (
+             id, judge_submission_id, user_id, quest_id, status,
+             source_code, language, mode
+           )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          id,
+          judgeSubmissionId,
+          userId,
+          questId,
+          status,
+          sourceCode,
+          language,
+          mode,
+        ],
       );
       return id;
     },
@@ -527,6 +533,162 @@ export function createDatabase(databaseUrl) {
           JSON.stringify(submission),
         ],
       );
+    },
+
+    async listDrafts(userId) {
+      const result = await pool.query(
+        `SELECT quest_id, source_code, updated_at
+           FROM quest_drafts
+          WHERE user_id = $1
+          ORDER BY updated_at DESC`,
+        [userId],
+      );
+      return result.rows.map((row) => ({
+        questId: row.quest_id,
+        source: row.source_code,
+        updatedAt: row.updated_at.toISOString(),
+      }));
+    },
+
+    async saveDraft(userId, questId, source) {
+      const result = await pool.query(
+        `INSERT INTO quest_drafts
+           (user_id, quest_id, source_code, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (user_id, quest_id) DO UPDATE SET
+           source_code = EXCLUDED.source_code,
+           updated_at = now()
+         RETURNING quest_id, source_code, updated_at`,
+        [userId, questId, source],
+      );
+      const row = result.rows[0];
+      return {
+        questId: row.quest_id,
+        source: row.source_code,
+        updatedAt: row.updated_at.toISOString(),
+      };
+    },
+
+    async replaceDrafts(userId, drafts) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("DELETE FROM quest_drafts WHERE user_id = $1", [
+          userId,
+        ]);
+        for (const draft of drafts) {
+          await client.query(
+            `INSERT INTO quest_drafts
+               (user_id, quest_id, source_code, updated_at)
+             VALUES ($1, $2, $3, now())`,
+            [userId, draft.questId, draft.source],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listSubmissionHistory(userId, limit = 100) {
+      const result = await pool.query(
+        `SELECT
+           id, judge_submission_id, quest_id, status, verdict, score,
+           source_code, language, mode, details, created_at, updated_at
+         FROM submissions
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2::integer`,
+        [userId, limit],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        judgeSubmissionId: row.judge_submission_id,
+        questId: row.quest_id,
+        status: row.status,
+        verdict: row.verdict,
+        score: row.score ?? 0,
+        source: row.source_code,
+        language: row.language,
+        mode: row.mode,
+        details: row.details,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+      }));
+    },
+
+    async getPlayerSave(userId) {
+      const [progress, drafts, submissions] = await Promise.all([
+        this.listProgress(userId),
+        this.listDrafts(userId),
+        this.listSubmissionHistory(userId),
+      ]);
+      const timestamps = [
+        ...progress.map((item) => item.updatedAt),
+        ...drafts.map((item) => item.updatedAt),
+        ...submissions.map((item) => item.updatedAt),
+      ].map((value) => Date.parse(value));
+      const latest = timestamps.length ? Math.max(...timestamps) : 0;
+      return {
+        version: 2,
+        accountId: userId,
+        updatedAt: new Date(latest).toISOString(),
+        progress,
+        drafts,
+        submissions,
+      };
+    },
+
+    async transferGuestSave(guestId, userId) {
+      if (!guestId || guestId === userId) return;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const guest = await client.query(
+          "SELECT id FROM users WHERE id = $1 AND is_guest = true FOR UPDATE",
+          [guestId],
+        );
+        if (!guest.rowCount) {
+          await client.query("COMMIT");
+          return;
+        }
+        await mergeGuestProgress(client, guestId, userId);
+        await client.query(
+          `INSERT INTO quest_drafts
+             (user_id, quest_id, source_code, updated_at)
+           SELECT $2, quest_id, source_code, updated_at
+             FROM quest_drafts
+            WHERE user_id = $1
+           ON CONFLICT (user_id, quest_id) DO UPDATE SET
+             source_code = EXCLUDED.source_code,
+             updated_at = GREATEST(
+               quest_drafts.updated_at,
+               EXCLUDED.updated_at
+             )`,
+          [guestId, userId],
+        );
+        await client.query(
+          "UPDATE submissions SET user_id = $2 WHERE user_id = $1",
+          [guestId, userId],
+        );
+        await client.query("DELETE FROM users WHERE id = $1", [guestId]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async discardGuestSave(guestId) {
+      if (!guestId) return;
+      await pool.query("DELETE FROM users WHERE id = $1 AND is_guest = true", [
+        guestId,
+      ]);
     },
 
     async close() {
