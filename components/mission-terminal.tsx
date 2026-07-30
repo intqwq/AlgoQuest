@@ -10,6 +10,7 @@ import {
 } from "@/lib/api-client";
 import type { Locale } from "@/lib/i18n";
 import { Quest } from "@/lib/quests";
+import { EditorialPanel } from "@/components/editorial-panel";
 
 type Verdict = "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
 type JudgeState =
@@ -102,6 +103,7 @@ const missionMessages = {
     evaluations: "SUBMISSION HISTORY",
     noEvaluations: "NO EVALUATIONS RECORDED FOR THIS QUEST.",
     autosave: "autosave: code + evaluations // device + cloud",
+    editorial: "EDITORIAL",
   },
   "zh-CN": {
     worldMap: "世界地图",
@@ -132,6 +134,7 @@ const missionMessages = {
     evaluations: "评测历史",
     noEvaluations: "本关暂无评测记录。",
     autosave: "自动保存：代码与评测记录 // 本地 + 云端",
+    editorial: "讨论 / 题解",
   },
   ja: {
     worldMap: "ワールドマップ",
@@ -162,6 +165,7 @@ const missionMessages = {
     evaluations: "提出履歴",
     noEvaluations: "このクエストの評価履歴はありません。",
     autosave: "自動保存：コードと評価 // 端末 + クラウド",
+    editorial: "解説 / 議論",
   },
 } as const;
 
@@ -328,6 +332,7 @@ export function MissionTerminal({
   const [guideProgress, setGuideProgress] = useState(0);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [editorReady, setEditorReady] = useState(false);
+  const [editorialOpen, setEditorialOpen] = useState(false);
   const copy = missionMessages[locale];
 
   useEffect(() => {
@@ -617,6 +622,12 @@ export function MissionTerminal({
 
   return (
     <section className="mission-terminal">
+      <EditorialPanel
+        quest={quest}
+        locale={locale}
+        open={editorialOpen}
+        onClose={() => setEditorialOpen(false)}
+      />
       {acceptedDialog && (
         <div className="ac-overlay" role="presentation">
           <section
@@ -671,7 +682,9 @@ export function MissionTerminal({
         <article className="problem-pane">
           <div className="pane-tabs">
             <button className="is-active">{copy.problem}</button>
-            <button disabled>EDITORIAL</button>
+            <button type="button" onClick={() => setEditorialOpen(true)}>
+              {copy.editorial}
+            </button>
           </div>
           <div className="pane-scroll">
             <p className="eyebrow">{`${quest.chapter} // ${copy.activeMission}`}</p>

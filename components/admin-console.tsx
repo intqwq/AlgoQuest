@@ -4,11 +4,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AdminQuestRecord,
   archiveAdminQuest,
+  EditorialPost,
   JudgeQuestDefinition,
+  loadEditorialModeration,
   loadAdminQuests,
   loadManagedPlayers,
   loadServerOverview,
   ManagedPlayer,
+  moderateEditorialPost,
   Player,
   saveAdminQuest,
   ServerOverview,
@@ -18,7 +21,7 @@ import {
 import type { Locale } from "@/lib/i18n";
 import type { Quest } from "@/lib/quests";
 
-type Tab = "players" | "quests" | "server";
+type Tab = "players" | "quests" | "editorial" | "server";
 
 const copies = {
   en: {
@@ -26,6 +29,7 @@ const copies = {
     players: "PLAYERS",
     quests: "QUESTS",
     server: "SERVER",
+    editorial: "MODERATION",
     search: "Search name or email",
     save: "SAVE CHANGES",
     verified: "EMAIL VERIFIED",
@@ -46,12 +50,16 @@ const copies = {
     maintenance: "MAINTENANCE MESSAGE",
     refresh: "REFRESH",
     close: "CLOSE",
+    approve: "APPROVE",
+    reject: "REJECT",
+    noPending: "NO POSTS WAITING FOR REVIEW.",
   },
   "zh-CN": {
     title: "管理控制台",
     players: "玩家",
     quests: "关卡",
     server: "服务器",
+    editorial: "内容审核",
     search: "搜索玩家名或邮箱",
     save: "保存更改",
     verified: "邮箱已验证",
@@ -72,12 +80,16 @@ const copies = {
     maintenance: "维护通知",
     refresh: "刷新",
     close: "关闭",
+    approve: "通过并发布",
+    reject: "拒绝",
+    noPending: "目前没有等待审核的内容。",
   },
   ja: {
     title: "管理コンソール",
     players: "プレイヤー",
     quests: "クエスト",
     server: "サーバー",
+    editorial: "投稿審査",
     search: "名前またはメールを検索",
     save: "変更を保存",
     verified: "メール認証済み",
@@ -98,6 +110,9 @@ const copies = {
     maintenance: "メンテナンス通知",
     refresh: "更新",
     close: "閉じる",
+    approve: "承認して公開",
+    reject: "却下",
+    noPending: "審査待ちの投稿はありません。",
   },
 } as const;
 
@@ -254,6 +269,7 @@ export function AdminConsole({
   const [players, setPlayers] = useState<ManagedPlayer[]>([]);
   const [records, setRecords] = useState<AdminQuestRecord[]>([]);
   const [server, setServer] = useState<ServerOverview>();
+  const [editorials, setEditorials] = useState<EditorialPost[]>([]);
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const [selectedId, setSelectedId] = useState("");
@@ -268,19 +284,61 @@ export function AdminConsole({
   const refreshPlayers = useCallback(() => {
     return loadManagedPlayers(query).then(setPlayers);
   }, [query]);
-  const refreshQuests = useCallback(() => loadAdminQuests().then(setRecords), []);
+  const refreshQuests = useCallback(async () => {
+    const nextRecords = await loadAdminQuests();
+    setRecords(nextRecords);
+    return nextRecords;
+  }, []);
   const refreshServer = useCallback(() => loadServerOverview().then(setServer), []);
+  const refreshEditorials = useCallback(
+    () => loadEditorialModeration("pending").then(setEditorials),
+    [],
+  );
+  const selectQuest = useCallback(
+    (quest: Quest, record?: AdminQuestRecord, isNew = false) => {
+      const publicCopy = structuredClone(quest);
+      const judgeCopy = record?.judgeDefinition
+        ? structuredClone(record.judgeDefinition)
+        : isNew
+          ? defaultJudge(publicCopy)
+          : null;
+      setSelectedId(quest.id);
+      setQuestDraft(publicCopy);
+      setJudgeDraft(judgeCopy);
+      setTestsText(JSON.stringify(judgeCopy?.tests ?? [], null, 2));
+      setTranslationsText(JSON.stringify(publicCopy.translations ?? {}, null, 2));
+      setCreating(isNew);
+      setMessage("");
+    },
+    [],
+  );
 
   useEffect(() => {
-    const handler = () => {
+    const handler = (event: Event) => {
       if (!allowed) return;
+      const detail = (event as CustomEvent<{ questId?: string }>).detail;
       setOpen(true);
+      if (detail?.questId) {
+        setTab("quests");
+        void refreshQuests()
+          .then((nextRecords) => {
+            const record = nextRecords.find((item) => item.id === detail.questId);
+            const quest =
+              record?.publicDefinition ??
+              builtInQuests.find((item) => item.id === detail.questId);
+            if (quest) selectQuest(quest, record);
+          })
+          .catch((error) =>
+            setMessage(error instanceof Error ? error.message : "QUEST LINK FAILED"),
+          );
+      }
       setMessage("");
     };
     window.addEventListener("algoquest:open-admin", handler);
     return () => window.removeEventListener("algoquest:open-admin", handler);
-  }, [allowed]);
+  }, [allowed, builtInQuests, refreshQuests, selectQuest]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- remote tab synchronization */
   useEffect(() => {
     if (!open) return;
     const load =
@@ -288,11 +346,14 @@ export function AdminConsole({
         ? refreshPlayers()
         : tab === "quests"
           ? refreshQuests()
-          : refreshServer();
+          : tab === "editorial"
+            ? refreshEditorials()
+            : refreshServer();
     void load.catch((error) =>
       setMessage(error instanceof Error ? error.message : "CONTROL LINK FAILED"),
     );
-  }, [open, refreshPlayers, refreshQuests, refreshServer, tab]);
+  }, [open, refreshEditorials, refreshPlayers, refreshQuests, refreshServer, tab]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const questOptions = useMemo(() => {
     const overrides = new Map(records.map((record) => [record.id, record]));
@@ -316,22 +377,6 @@ export function AdminConsole({
         (right.quest.sortOrder ?? Number(right.quest.index) ?? 9999),
     );
   }, [builtInQuests, records]);
-
-  const selectQuest = (quest: Quest, record?: AdminQuestRecord, isNew = false) => {
-    const publicCopy = structuredClone(quest);
-    const judgeCopy = record?.judgeDefinition
-      ? structuredClone(record.judgeDefinition)
-      : isNew
-        ? defaultJudge(publicCopy)
-        : null;
-    setSelectedId(quest.id);
-    setQuestDraft(publicCopy);
-    setJudgeDraft(judgeCopy);
-    setTestsText(JSON.stringify(judgeCopy?.tests ?? [], null, 2));
-    setTranslationsText(JSON.stringify(publicCopy.translations ?? {}, null, 2));
-    setCreating(isNew);
-    setMessage("");
-  };
 
   const saveQuest = async (event: FormEvent) => {
     event.preventDefault();
@@ -390,7 +435,7 @@ export function AdminConsole({
               <button type="button" onClick={() => setOpen(false)}>[ {copy.close} ]</button>
             </header>
             <nav>
-              {(["players", "quests"] as Tab[]).map((item) => (
+              {(["players", "quests", "editorial"] as Tab[]).map((item) => (
                 <button
                   key={item}
                   className={tab === item ? "is-active" : ""}
@@ -517,6 +562,43 @@ export function AdminConsole({
                 ) : (
                   <div className="admin-empty">&gt; SELECT_OR_CREATE_QUEST</div>
                 )}
+              </div>
+            )}
+
+            {tab === "editorial" && (
+              <div className="admin-content moderation-list">
+                {editorials.length ? editorials.map((post) => (
+                  <article key={post.id} className="moderation-card">
+                    <div>
+                      <span>{`${post.kind.toUpperCase()} // ${post.questId}`}</span>
+                      <strong className={`editorial-role editorial-role--${post.author.role}`}>
+                        {`${post.author.role.toUpperCase()} // ${post.author.displayName}`}
+                      </strong>
+                    </div>
+                    <h3>{post.title}</h3>
+                    <p>{post.content}</p>
+                    <time>{new Date(post.createdAt).toLocaleString()}</time>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => void moderateEditorialPost(post.id, "published")
+                          .then(() => refreshEditorials())
+                          .catch((error) => setMessage(error instanceof Error ? error.message : "MODERATION FAILED"))}
+                      >
+                        [ {copy.approve} ]
+                      </button>
+                      <button
+                        type="button"
+                        className="is-danger"
+                        onClick={() => void moderateEditorialPost(post.id, "rejected")
+                          .then(() => refreshEditorials())
+                          .catch((error) => setMessage(error instanceof Error ? error.message : "MODERATION FAILED"))}
+                      >
+                        [ {copy.reject} ]
+                      </button>
+                    </div>
+                  </article>
+                )) : <div className="admin-empty">&gt; {copy.noPending}</div>}
               </div>
             )}
 

@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import {
   bearerToken,
   cleanDisplayName,
@@ -66,7 +67,7 @@ function corsHeaders() {
   return {
     "access-control-allow-origin": allowedOrigin,
     "access-control-allow-headers": "authorization, content-type",
-    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "access-control-expose-headers": "location, retry-after",
     vary: "Origin",
   };
@@ -616,6 +617,69 @@ const server = http.createServer(async (request, response) => {
       return json(response, 200, { player });
     }
 
+    const editorialQuestMatch = url.pathname.match(
+      /^\/v1\/editorial\/quests\/([a-z0-9-]{1,96})$/,
+    );
+    if (editorialQuestMatch) {
+      requirePlayableAccount(player);
+      const questId = editorialQuestMatch[1];
+      const record = await database.getQuestRecord(questId);
+      const builtIn = missingPrerequisites(questId, []) !== undefined;
+      if ((!record && !builtIn) || record?.archived) {
+        throw new ApiError(404, "QUEST_NOT_FOUND");
+      }
+      const moderator = ["admin", "owner"].includes(player.role);
+      const eligibility = await database.editorialEligibility(player.id, questId);
+
+      if (request.method === "GET") {
+        return json(response, 200, {
+          posts: await database.listEditorialPosts({
+            questId,
+            viewerId: player.id,
+            includeModeration: moderator,
+          }),
+          eligibility: {
+            discussion: moderator || eligibility.hasSubmission,
+            solution: moderator || eligibility.hasCleared,
+            directPublish: moderator,
+          },
+        });
+      }
+
+      if (request.method === "POST") {
+        const body = await readJson(request, 80 * 1024);
+        if (body.kind !== "discussion" && body.kind !== "solution") {
+          throw new ApiError(400, "INVALID_EDITORIAL_KIND");
+        }
+        if (
+          (!moderator && body.kind === "discussion" && !eligibility.hasSubmission) ||
+          (!moderator && body.kind === "solution" && !eligibility.hasCleared)
+        ) {
+          throw new ApiError(
+            403,
+            body.kind === "solution"
+              ? "QUEST_CLEAR_REQUIRED"
+              : "QUEST_SUBMISSION_REQUIRED",
+          );
+        }
+        const title = boundedText(body.title, 160);
+        const content = boundedText(body.content, 60 * 1024);
+        if (title.length < 3 || content.length < 10) {
+          throw new ApiError(400, "EDITORIAL_CONTENT_REQUIRED");
+        }
+        const post = await database.createEditorialPost({
+          id: crypto.randomUUID(),
+          questId,
+          authorId: player.id,
+          kind: body.kind,
+          title,
+          content,
+          status: moderator ? "published" : "pending",
+        });
+        return json(response, 201, { post });
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/v1/admin/users") {
       requireAdmin(player);
       const query = boundedText(url.searchParams.get("query"), 120);
@@ -673,6 +737,39 @@ const server = http.createServer(async (request, response) => {
       return json(response, 200, {
         quests: await database.listQuestRecords({ includeArchived: true }),
       });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/admin/editorial") {
+      requireAdmin(player);
+      const requestedStatus = url.searchParams.get("status");
+      const status = ["pending", "published", "rejected"].includes(requestedStatus)
+        ? requestedStatus
+        : "pending";
+      return json(response, 200, {
+        posts: await database.listEditorialPosts({
+          viewerId: player.id,
+          includeModeration: true,
+          status,
+        }),
+      });
+    }
+
+    const editorialModerationMatch = url.pathname.match(
+      /^\/v1\/admin\/editorial\/([0-9a-f-]{36})$/,
+    );
+    if (request.method === "PATCH" && editorialModerationMatch) {
+      requireAdmin(player);
+      const body = await readJson(request, 4 * 1024);
+      if (body.status !== "published" && body.status !== "rejected") {
+        throw new ApiError(400, "INVALID_MODERATION_STATUS");
+      }
+      const post = await database.moderateEditorialPost(
+        editorialModerationMatch[1],
+        body.status,
+        player.id,
+      );
+      if (!post) throw new ApiError(404, "EDITORIAL_NOT_FOUND");
+      return json(response, 200, { post });
     }
 
     if (

@@ -92,3 +92,26 @@ test("map layout migration stores durable collision-free coordinates", async () 
   assert.match(migration, /CHECK \(x BETWEEN 2 AND 98\)/);
   assert.match(migration, /CHECK \(y BETWEEN 2 AND 98\)/);
 });
+
+test("editorial migration separates discussions, solutions and moderation state", async () => {
+  const migration = await readFile(
+    new URL("../migrations/006_editorial.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS editorial_posts/);
+  assert.match(migration, /kind IN \('discussion', 'solution'\)/);
+  assert.match(migration, /status IN \('pending', 'published', 'rejected'\)/);
+  assert.match(migration, /author_id uuid NOT NULL REFERENCES users/);
+  assert.match(migration, /moderated_by uuid REFERENCES users/);
+});
+
+test("editorial routes enforce submission, clear and moderator requirements", async () => {
+  const server = await readFile(
+    new URL("../src/server.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(server, /QUEST_SUBMISSION_REQUIRED/);
+  assert.match(server, /QUEST_CLEAR_REQUIRED/);
+  assert.match(server, /moderator \? "published" : "pending"/);
+  assert.match(server, /requireAdmin\(player\)[\s\S]*moderateEditorialPost/);
+});

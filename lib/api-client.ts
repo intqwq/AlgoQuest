@@ -47,6 +47,32 @@ export type AdminQuestRecord = {
   updatedAt: string;
 };
 
+export type EditorialKind = "discussion" | "solution";
+export type EditorialStatus = "pending" | "published" | "rejected";
+
+export type EditorialPost = {
+  id: string;
+  questId: string;
+  kind: EditorialKind;
+  title: string;
+  content: string;
+  status: EditorialStatus;
+  author: {
+    id: string;
+    displayName: string;
+    role: Player["role"];
+  };
+  createdAt: string;
+  updatedAt: string;
+  moderatedAt: string | null;
+};
+
+export type EditorialEligibility = {
+  discussion: boolean;
+  solution: boolean;
+  directPublish: boolean;
+};
+
 export type ServerOverview = {
   settings: {
     registrationEnabled: boolean;
@@ -386,6 +412,53 @@ export async function saveQuestMapLayout(
     body: JSON.stringify({ positions }),
   });
   return body.mapLayout;
+}
+
+export async function loadQuestEditorial(questId: string) {
+  return adminJson<{
+    posts: EditorialPost[];
+    eligibility: EditorialEligibility;
+  }>(`/editorial/quests/${encodeURIComponent(questId)}`, {
+    headers: { accept: "application/json" },
+  });
+}
+
+export async function createEditorialPost(
+  questId: string,
+  input: { kind: EditorialKind; title: string; content: string },
+) {
+  const body = await adminJson<{ post: EditorialPost }>(
+    `/editorial/quests/${encodeURIComponent(questId)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.post;
+}
+
+export async function loadEditorialModeration(status: EditorialStatus = "pending") {
+  const body = await adminJson<{ posts: EditorialPost[] }>(
+    `/admin/editorial?status=${encodeURIComponent(status)}`,
+    { headers: { accept: "application/json" } },
+  );
+  return body.posts;
+}
+
+export async function moderateEditorialPost(
+  postId: string,
+  status: Extract<EditorialStatus, "published" | "rejected">,
+) {
+  const body = await adminJson<{ post: EditorialPost }>(
+    `/admin/editorial/${encodeURIComponent(postId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    },
+  );
+  return body.post;
 }
 
 export async function loadServerOverview() {

@@ -20,6 +20,7 @@ import {
 import { isQuestUnlocked, Quest, quests } from "@/lib/quests";
 import {
   arrangeQuestPositions,
+  clampMapPosition,
   MapPosition,
   nearestOpenMapPosition,
 } from "@/lib/map-layout";
@@ -225,6 +226,13 @@ export default function Home() {
   };
 
   const moveMapQuest = (questId: string, desired: MapPosition) => {
+    setMapDraft((current) => ({
+      ...current,
+      [questId]: clampMapPosition(desired),
+    }));
+  };
+
+  const commitMapQuest = (questId: string, desired: MapPosition) => {
     setMapDraft((current) => ({
       ...current,
       [questId]: nearestOpenMapPosition(questId, desired, current),
@@ -473,6 +481,7 @@ export default function Home() {
   const totalXp = questCatalog
     .filter((quest) => cleared.has(quest.id))
     .reduce((sum, quest) => sum + quest.xp, 0);
+  const maximumXp = questCatalog.reduce((sum, quest) => sum + quest.xp, 0);
   const selectedPlayable = isQuestUnlocked(selected, cleared);
 
   return (
@@ -716,10 +725,14 @@ export default function Home() {
           )}
           <div className="stat-row">
             <span>XP</span>
-            <strong>{String(totalXp).padStart(3, "0")} / 420</strong>
+            <strong>{String(totalXp).padStart(3, "0")} / {maximumXp}</strong>
           </div>
           <div className="progress-track">
-            <span style={{ width: `${Math.min(100, (totalXp / 420) * 100)}%` }} />
+            <span
+              style={{
+                width: `${maximumXp ? Math.min(100, (totalXp / maximumXp) * 100) : 0}%`,
+              }}
+            />
           </div>
           <div className="stat-row">
             <span>{copy.streak}</span>
@@ -807,6 +820,7 @@ export default function Home() {
             selectedId={selected.id}
             copy={{
               ...copy,
+              edit: copy.editQuest,
               dragMap: mapEditing ? copy.mapEditHint : copy.dragMap,
             }}
             onSelect={(quest) => {
@@ -822,7 +836,16 @@ export default function Home() {
             }}
             onOpen={openQuest}
             editable={mapEditing}
+            canManage={player?.role === "admin" || player?.role === "owner"}
             onPositionChange={moveMapQuest}
+            onPositionCommit={commitMapQuest}
+            onEdit={(quest) => {
+              window.dispatchEvent(
+                new CustomEvent("algoquest:open-admin", {
+                  detail: { questId: quest.id },
+                }),
+              );
+            }}
           />
 
           <aside className="quest-brief" id="missions">

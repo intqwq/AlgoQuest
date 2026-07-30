@@ -1,6 +1,6 @@
 "use client";
 
-import { PointerEvent, useMemo, useRef, useState } from "react";
+import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Quest, QuestStatus } from "@/lib/quests";
 
 type MapCopy = {
@@ -14,6 +14,7 @@ type MapCopy = {
   reward: string;
   skills: string;
   dragMap: string;
+  edit?: string;
 };
 
 type QuestState = {
@@ -47,7 +48,10 @@ export function QuestMap({
   onSelect,
   onOpen,
   editable = false,
+  canManage = false,
   onPositionChange,
+  onPositionCommit,
+  onEdit,
 }: {
   questStates: QuestState[];
   selectedId: string;
@@ -55,12 +59,20 @@ export function QuestMap({
   onSelect: (quest: Quest) => void;
   onOpen: (quest: Quest) => void;
   editable?: boolean;
+  canManage?: boolean;
   onPositionChange?: (
     questId: string,
     position: { x: number; y: number },
   ) => void;
+  onPositionCommit?: (
+    questId: string,
+    position: { x: number; y: number },
+  ) => void;
+  onEdit?: (quest: Quest) => void;
 }) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panFrame = useRef<number | undefined>(undefined);
+  const pendingPan = useRef(pan);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{
     pointerId: number;
@@ -76,6 +88,7 @@ export function QuestMap({
     y: number;
     originX: number;
     originY: number;
+    latest: { x: number; y: number };
   } | undefined>(undefined);
 
   const byId = useMemo(
@@ -93,6 +106,15 @@ export function QuestMap({
         }),
       ),
     [byId, questStates],
+  );
+
+  useEffect(
+    () => () => {
+      if (panFrame.current !== undefined) {
+        window.cancelAnimationFrame(panFrame.current);
+      }
+    },
+    [],
   );
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
@@ -118,9 +140,14 @@ export function QuestMap({
     if (!drag.current || drag.current.pointerId !== event.pointerId) return;
     const nextX = drag.current.originX + event.clientX - drag.current.x;
     const nextY = drag.current.originY + event.clientY - drag.current.y;
-    setPan({
+    pendingPan.current = {
       x: Math.max(-360, Math.min(360, nextX)),
       y: Math.max(-210, Math.min(210, nextY)),
+    };
+    if (panFrame.current !== undefined) return;
+    panFrame.current = window.requestAnimationFrame(() => {
+      setPan(pendingPan.current);
+      panFrame.current = undefined;
     });
   };
 
@@ -148,6 +175,7 @@ export function QuestMap({
       y: event.clientY,
       originX: quest.mapPosition.x,
       originY: quest.mapPosition.y,
+      latest: quest.mapPosition,
     };
   };
 
@@ -156,15 +184,18 @@ export function QuestMap({
     if (!current || current.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    onPositionChange?.(current.questId, {
+    current.latest = {
       x: current.originX + ((event.clientX - current.x) / canvas.width) * 100,
       y: current.originY + ((event.clientY - current.y) / canvas.height) * 100,
-    });
+    };
+    onPositionChange?.(current.questId, current.latest);
   };
 
   const stopNodeDrag = (event: PointerEvent<HTMLButtonElement>) => {
     if (nodeDrag.current?.pointerId !== event.pointerId) return;
+    const current = nodeDrag.current;
     nodeDrag.current = undefined;
+    onPositionCommit?.(current.questId, current.latest);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -217,6 +248,20 @@ export function QuestMap({
               }}
               data-map-interactive="true"
             >
+              {canManage && (
+                <button
+                  type="button"
+                  className="quest-node-edit"
+                  aria-label={`${copy.edit ?? "Edit"} ${display.title}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onEdit?.(base);
+                  }}
+                >
+                  ✎
+                </button>
+              )}
               <button
                 type="button"
                 className={`quest-node quest-node--${displayStatus} ${

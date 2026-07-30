@@ -1060,6 +1060,119 @@ export function createDatabase(databaseUrl) {
       }
     },
 
+    async editorialEligibility(userId, questId) {
+      const result = await pool.query(
+        `SELECT
+           EXISTS (
+             SELECT 1
+               FROM submissions
+              WHERE user_id = $1 AND quest_id = $2
+           ) AS has_submission,
+           EXISTS (
+             SELECT 1
+               FROM quest_progress
+              WHERE user_id = $1
+                AND quest_id = $2
+                AND status = 'cleared'
+           ) AS has_cleared`,
+        [userId, questId],
+      );
+      return {
+        hasSubmission: result.rows[0].has_submission,
+        hasCleared: result.rows[0].has_cleared,
+      };
+    },
+
+    async listEditorialPosts({
+      questId,
+      viewerId,
+      includeModeration = false,
+      status,
+    } = {}) {
+      const values = [viewerId];
+      const conditions = [];
+      if (questId) {
+        values.push(questId);
+        conditions.push(`p.quest_id = $${values.length}`);
+      }
+      if (status) {
+        values.push(status);
+        conditions.push(`p.status = $${values.length}`);
+      } else if (!includeModeration) {
+        conditions.push("(p.status = 'published' OR p.author_id = $1)");
+      }
+      const result = await pool.query(
+        `SELECT
+           p.id,
+           p.quest_id,
+           p.kind,
+           p.title,
+           p.content,
+           p.status,
+           p.created_at,
+           p.updated_at,
+           p.moderated_at,
+           u.id AS author_id,
+           u.display_name AS author_name,
+           u.role AS author_role
+         FROM editorial_posts p
+         JOIN users u ON u.id = p.author_id
+         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY
+           CASE p.status WHEN 'pending' THEN 0 WHEN 'published' THEN 1 ELSE 2 END,
+           p.created_at DESC
+         LIMIT 200`,
+        values,
+      );
+      return result.rows.map(mapEditorialPost);
+    },
+
+    async createEditorialPost({
+      id,
+      questId,
+      authorId,
+      kind,
+      title,
+      content,
+      status,
+    }) {
+      const result = await pool.query(
+        `INSERT INTO editorial_posts
+           (id, quest_id, author_id, kind, title, content, status,
+            moderated_by, moderated_at)
+         VALUES
+           ($1, $2, $3, $4, $5, $6, $7::varchar(16),
+            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN $3 END,
+            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN now() END)
+         RETURNING id`,
+        [id, questId, authorId, kind, title, content, status],
+      );
+      const posts = await this.listEditorialPosts({
+        viewerId: authorId,
+        includeModeration: true,
+      });
+      return posts.find((post) => post.id === result.rows[0].id);
+    },
+
+    async moderateEditorialPost(postId, status, moderatorId) {
+      const result = await pool.query(
+        `UPDATE editorial_posts
+            SET status = $2,
+                moderated_by = $3,
+                moderated_at = now(),
+                updated_at = now()
+          WHERE id = $1
+          RETURNING id`,
+        [postId, status, moderatorId],
+      );
+      if (!result.rowCount) return undefined;
+      const posts = await this.listEditorialPosts({
+        viewerId: moderatorId,
+        includeModeration: true,
+      });
+      return posts.find((post) => post.id === postId);
+    },
+
     async close() {
       await pool.end();
     },
@@ -1074,6 +1187,25 @@ function mapQuestRecord(row) {
     archived: row.archived,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapEditorialPost(row) {
+  return {
+    id: row.id,
+    questId: row.quest_id,
+    kind: row.kind,
+    title: row.title,
+    content: row.content,
+    status: row.status,
+    author: {
+      id: row.author_id,
+      displayName: row.author_name,
+      role: row.author_role,
+    },
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    moderatedAt: row.moderated_at?.toISOString() ?? null,
   };
 }
 

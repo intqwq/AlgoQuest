@@ -136,3 +136,22 @@ try {
 finally {
     Pop-Location
 }
+
+if (
+    $Mode -eq "all" -and
+    [Environment]::UserInteractive -and
+    -not [Console]::IsInputRedirected
+) {
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        Push-Location $ProjectRoot
+        try {
+            & node scripts/ops-console.mjs --env-file .env.windows
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    else {
+        Write-Warning "Node.js is not in PATH, so the interactive operations console was not opened."
+    }
+}
