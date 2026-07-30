@@ -1,15 +1,42 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
-import { MissionTerminal } from "@/components/mission-terminal";
 import {
   loadCurrentPlayer,
-  loadQuestProgress,
+  loadPlayerSave,
+  PlayerSave,
   Player,
+  resolvePlayerSave,
+  SaveSubmission,
+  saveQuestDraft,
   saveQuestProgress,
 } from "@/lib/api-client";
 import { isQuestUnlocked, Quest, QuestStatus, quests } from "@/lib/quests";
+import {
+  addSubmission,
+  hasSaveData,
+  loadLocalPlayerSave,
+  markQuestCleared,
+  persistLocalPlayerSave,
+  replaceDraft,
+  saveSummary,
+  savesConflict,
+} from "@/lib/player-save";
+
+const MissionTerminal = dynamic(
+  () =>
+    import("@/components/mission-terminal").then(
+      (module) => module.MissionTerminal,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="mission-loading">LOADING MISSION WORKBENCH...</section>
+    ),
+  },
+);
 
 const logo = String.raw`
     _    _              ___                  _
@@ -79,96 +106,252 @@ function QuestNode({
   );
 }
 
-const progressStorageKey = "algoquest.cleared-quests";
+type SaveConflict = {
+  local: PlayerSave;
+  cloud: PlayerSave;
+};
 
-function loadLocalProgress() {
-  const cleared = new Set<string>();
-  try {
-    const saved = JSON.parse(
-      window.localStorage.getItem(progressStorageKey) ?? "[]",
-    ) as unknown;
-    if (Array.isArray(saved)) {
-      saved.forEach((questId) => {
-        if (typeof questId === "string") cleared.add(questId);
-      });
-    }
-  } catch {
-    // A damaged local save must not prevent the game from opening.
-  }
-  if (window.localStorage.getItem("algoquest.signal-fire") === "cleared") {
-    cleared.add("signal-fire");
-  }
-  return cleared;
+function openAccount(view: "login" | "register" = "login") {
+  window.dispatchEvent(
+    new CustomEvent("algoquest:open-account", { detail: { view } }),
+  );
+}
+
+function SaveCard({
+  label,
+  save,
+}: {
+  label: "LOCAL SAVE" | "CLOUD SAVE";
+  save: PlayerSave;
+}) {
+  const summary = saveSummary(save);
+  const latestDraft = [...save.drafts].sort(
+    (left, right) =>
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+  )[0];
+  return (
+    <div className="save-card">
+      <div className="save-card__heading">
+        <strong>{label}</strong>
+        <span>{label === "LOCAL SAVE" ? "THIS DEVICE" : "PLAYER DATABASE"}</span>
+      </div>
+      <dl>
+        <div>
+          <dt>CLEARED</dt>
+          <dd>{summary.cleared} QUESTS</dd>
+        </div>
+        <div>
+          <dt>DRAFTS</dt>
+          <dd>{summary.drafts} FILES</dd>
+        </div>
+        <div>
+          <dt>EVALUATIONS</dt>
+          <dd>{summary.submissions} RECORDS</dd>
+        </div>
+        <div>
+          <dt>LAST UPDATE</dt>
+          <dd>
+            {Date.parse(summary.updatedAt)
+              ? new Date(summary.updatedAt).toLocaleString()
+              : "EMPTY"}
+          </dd>
+        </div>
+        <div>
+          <dt>LATEST CODE</dt>
+          <dd>
+            {latestDraft
+              ? `${latestDraft.questId} // ${latestDraft.source.split("\n").length} lines`
+              : "NO DRAFT"}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
 }
 
 export default function Home() {
   const [selected, setSelected] = useState<Quest>(quests[0]);
-  const [notice, setNotice] = useState("SYSTEM READY // SELECT A QUEST");
+  const [notice, setNotice] = useState("ACCOUNT REQUIRED // WELCOME MODE");
   const [screen, setScreen] = useState<"world" | "mission">("world");
   const [cleared, setCleared] = useState<Set<string>>(new Set());
   const [player, setPlayer] = useState<Player>();
+  const [playerSave, setPlayerSave] = useState<PlayerSave>();
+  const [saveConflict, setSaveConflict] = useState<SaveConflict>();
+  const [syncingSave, setSyncingSave] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
-  const refreshAccountProgress = useCallback(() => {
-    void Promise.all([loadQuestProgress(), loadCurrentPlayer()])
-      .then(([progress, currentPlayer]) => {
-        setPlayer(currentPlayer);
-        setCleared((current) => {
-          const merged = new Set(current);
-          progress
-            .filter((item) => item.status === "cleared")
-            .forEach((item) => merged.add(item.questId));
-          window.localStorage.setItem(
-            progressStorageKey,
-            JSON.stringify([...merged]),
-          );
-          return merged;
-        });
-      })
-      .catch(() => {
-        // Local progress remains usable while the account service is offline.
-      });
+  const canPlay = Boolean(
+    player && !player.isGuest && player.emailVerified && playerSave,
+  );
+
+  const applySave = useCallback((save: PlayerSave) => {
+    persistLocalPlayerSave(save);
+    setPlayerSave(save);
+    setCleared(
+      new Set(
+        save.progress
+          .filter((item) => item.status === "cleared")
+          .map((item) => item.questId),
+      ),
+    );
+    setSaveConflict(undefined);
+    setSaveError("");
+    setNotice("SAVE SYNCHRONIZED // SELECT A QUEST");
   }, []);
 
-  useEffect(() => {
-    // Browser persistence is intentionally synchronized after hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCleared(loadLocalProgress());
-    refreshAccountProgress();
+  const refreshAccountProgress = useCallback(() => {
+    setSyncingSave(true);
+    setSaveError("");
+    void loadCurrentPlayer()
+      .then(async (currentPlayer) => {
+        setPlayer(currentPlayer);
+        if (
+          !currentPlayer ||
+          currentPlayer.isGuest ||
+          !currentPlayer.emailVerified
+        ) {
+          setPlayerSave(undefined);
+          setCleared(new Set());
+          setSaveConflict(undefined);
+          setScreen("world");
+          setNotice(
+            currentPlayer && !currentPlayer.isGuest
+              ? "EMAIL VERIFICATION REQUIRED // WELCOME MODE"
+              : "ACCOUNT REQUIRED // WELCOME MODE",
+          );
+          return;
+        }
 
+        const [cloud, local] = await Promise.all([
+          loadPlayerSave(),
+          Promise.resolve(loadLocalPlayerSave(currentPlayer.id)),
+        ]);
+        if (savesConflict(local, cloud)) {
+          setPlayerSave(undefined);
+          setCleared(new Set());
+          setSaveConflict({ local, cloud });
+          setNotice("SAVE CONFLICT // PLAYER DECISION REQUIRED");
+          return;
+        }
+
+        const canonical =
+          hasSaveData(local) && !hasSaveData(cloud)
+            ? await resolvePlayerSave("local", local)
+            : cloud;
+        applySave(canonical);
+      })
+      .catch((error) => {
+        setPlayerSave(undefined);
+        setSaveError(
+          error instanceof Error ? error.message : "Save service unavailable.",
+        );
+        setNotice("SAVE LINK OFFLINE // GAMEPLAY LOCKED");
+      })
+      .finally(() => setSyncingSave(false));
+  }, [applySave]);
+
+  useEffect(() => {
+    // Initial authentication and save hydration intentionally update page state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshAccountProgress();
+  }, [refreshAccountProgress]);
+
+  useEffect(() => {
     const syncScreenFromHash = () => {
       const missionId = window.location.hash.match(/^#mission\/([a-z0-9-]+)$/)?.[1];
       const mission = quests.find(
         (quest) => quest.id === missionId && quest.problem,
       );
-      if (mission) {
+      if (mission && canPlay && isQuestUnlocked(mission, cleared)) {
         setSelected(mission);
         setScreen("mission");
       } else {
         setScreen("world");
+        if (mission && !canPlay) {
+          window.history.replaceState(null, "", "#top");
+        }
       }
     };
 
     syncScreenFromHash();
     window.addEventListener("hashchange", syncScreenFromHash);
     return () => window.removeEventListener("hashchange", syncScreenFromHash);
-  }, [refreshAccountProgress]);
+  }, [canPlay, cleared]);
+
+  const chooseSave = async (choice: "local" | "cloud") => {
+    if (!saveConflict) return;
+    setSyncingSave(true);
+    setSaveError("");
+    try {
+      const canonical = await resolvePlayerSave(choice, saveConflict.local);
+      applySave(canonical);
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "Save resolution failed.",
+      );
+    } finally {
+      setSyncingSave(false);
+    }
+  };
 
   const completeQuest = (questId: string, score: number) => {
-    setCleared((current) => {
-      const updated = new Set(current);
-      updated.add(questId);
-      window.localStorage.setItem(
-        progressStorageKey,
-        JSON.stringify([...updated]),
+    setPlayerSave((current) => {
+      if (!current) return current;
+      const updated = markQuestCleared(current, questId, score);
+      persistLocalPlayerSave(updated);
+      setCleared(
+        new Set(
+          updated.progress
+            .filter((item) => item.status === "cleared")
+            .map((item) => item.questId),
+        ),
       );
       return updated;
     });
     void saveQuestProgress(questId, score).catch(() => {
-      // The accepted submission is still visible locally and can sync later.
+      setNotice("AC SAVED LOCALLY // CLOUD RETRY REQUIRED");
     });
   };
 
+  const saveDraft = useCallback((questId: string, source: string) => {
+    const localDraft = {
+      questId,
+      source,
+      updatedAt: new Date().toISOString(),
+    };
+    setPlayerSave((current) => {
+      if (!current) return current;
+      const updated = replaceDraft(current, localDraft);
+      persistLocalPlayerSave(updated);
+      return updated;
+    });
+    void saveQuestDraft(questId, source)
+      .then((cloudDraft) => {
+        setPlayerSave((current) => {
+          if (!current) return current;
+          const updated = replaceDraft(current, cloudDraft);
+          persistLocalPlayerSave(updated);
+          return updated;
+        });
+      })
+      .catch(() => setNotice("DRAFT SAVED LOCALLY // CLOUD LINK RETRYING"));
+  }, []);
+
+  const recordSubmission = useCallback((submission: SaveSubmission) => {
+    setPlayerSave((current) => {
+      if (!current) return current;
+      const updated = addSubmission(current, submission);
+      persistLocalPlayerSave(updated);
+      return updated;
+    });
+  }, []);
+
   const openQuest = (quest: Quest) => {
+    if (!canPlay) {
+      setNotice("LOGIN REQUIRED // MISSIONS REMAIN LOCKED");
+      openAccount("login");
+      return;
+    }
     if (!isQuestUnlocked(quest, cleared)) {
       setSelected(quest);
       setNotice(
@@ -221,11 +404,22 @@ export default function Home() {
           AlgoQuest
         </a>
         <nav aria-label="Main navigation">
-          <a className="active" href="#map">
-            [ WORLD_MAP ]
-          </a>
-          <a href="#missions">[ MISSIONS ]</a>
-          <a href="#codex">[ CODEX ]</a>
+          {canPlay ? (
+            <>
+              <a className="active" href="#map">
+                [ WORLD_MAP ]
+              </a>
+              <a href="#missions">[ MISSIONS ]</a>
+              <a href="#codex">[ CODEX ]</a>
+            </>
+          ) : (
+            <>
+              <a className="active" href="#top">
+                [ WELCOME ]
+              </a>
+              <a href="#how-it-works">[ HOW_IT_WORKS ]</a>
+            </>
+          )}
         </nav>
         <AccountPanel
           player={player}
@@ -240,16 +434,68 @@ export default function Home() {
         <span className="status-message">
           {screen === "mission" ? "MISSION MODE // JUDGE LINK ACTIVE" : notice}
         </span>
-        <span>LATENCY 12ms</span>
+        <span>{canPlay ? "CLOUD SAVE ONLINE" : "WELCOME MODE"}</span>
       </div>
 
-      {screen === "mission" ? (
+      {saveConflict && (
+        <div className="save-conflict-overlay">
+          <section
+            className="save-conflict-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="save-conflict-title"
+          >
+            <div className="account-panel__bar">
+              <span>SAVE_CONFLICT.exe</span>
+              <span>DECISION REQUIRED</span>
+            </div>
+            <div className="save-conflict-panel__body">
+              <p className="eyebrow">TWO SAVE SLOTS DISAGREE</p>
+              <h2 id="save-conflict-title">CHOOSE YOUR SAVE</h2>
+              <p>
+                Code drafts follow the save you choose. Verified judge records
+                are retained and merged so an old result cannot vanish.
+              </p>
+              <div className="save-compare">
+                <SaveCard label="LOCAL SAVE" save={saveConflict.local} />
+                <SaveCard label="CLOUD SAVE" save={saveConflict.cloud} />
+              </div>
+              {saveError && <p className="account-message">{saveError}</p>}
+              <div className="save-choice-actions">
+                <button
+                  type="button"
+                  disabled={syncingSave}
+                  onClick={() => void chooseSave("local")}
+                >
+                  [ USE LOCAL SAVE ]
+                </button>
+                <button
+                  type="button"
+                  disabled={syncingSave}
+                  onClick={() => void chooseSave("cloud")}
+                >
+                  [ USE CLOUD SAVE ]
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {screen === "mission" && canPlay && playerSave ? (
         <MissionTerminal
           key={selected.id}
           quest={selected}
           nextQuestTitle={nextAfterSelected?.title}
+          initialCode={
+            playerSave.drafts.find((item) => item.questId === selected.id)
+              ?.source
+          }
+          history={playerSave.submissions}
           onExit={exitMission}
           onComplete={completeQuest}
+          onDraftChange={saveDraft}
+          onSubmission={recordSubmission}
         />
       ) : (
         <>
@@ -269,31 +515,63 @@ export default function Home() {
             from the first line of C++ to the deepest ruins of graph theory.
           </p>
           <div className="hero-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => openQuest(nextQuest)}
-            >
-              &gt; {cleared.has(nextQuest.id) ? "REPLAY" : "CONTINUE"} QUEST_
-              {nextQuest.index}
-            </button>
-            <button
-              className="text-button"
-              onClick={() => setNotice("SAVE SLOT // LOCAL SYNC ONLINE")}
-            >
-              [ VIEW_SAVE ]
-            </button>
+            {canPlay ? (
+              <>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => openQuest(nextQuest)}
+                >
+                  &gt; {cleared.has(nextQuest.id) ? "REPLAY" : "CONTINUE"} QUEST_
+                  {nextQuest.index}
+                </button>
+                <button
+                  className="text-button"
+                  onClick={refreshAccountProgress}
+                >
+                  [ SYNC_SAVE ]
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => openAccount("login")}
+                >
+                  &gt; LOGIN TO BEGIN_
+                </button>
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => openAccount("register")}
+                >
+                  [ CREATE PLAYER ]
+                </button>
+              </>
+            )}
           </div>
+          {!canPlay && (
+            <p className="login-gate-note">
+              {syncingSave
+                ? "CHECKING PLAYER DATABASE..."
+                : saveError
+                  ? `SAVE LINK ERROR // ${saveError}`
+                  : player && !player.isGuest && !player.emailVerified
+                    ? "VERIFY YOUR EMAIL TO UNLOCK THE WORLD MAP."
+                    : "MISSIONS, EDITOR AND JUDGE UNLOCK AFTER LOGIN."}
+            </p>
+          )}
         </div>
 
         <aside className="character-card" aria-label="Player status">
           <div className="panel-heading">
             <span>PLAYER.dat</span>
-            <span>● ONLINE</span>
+            <span>● {canPlay ? "ONLINE" : "LOCKED"}</span>
           </div>
           <pre className="avatar" aria-hidden="true">{String.raw`
        /\_/\
-      ( o.o )   < READY
+      ( o.o )   < ${canPlay ? "READY" : "LOGIN"}
        > ^ <
      __/| |\__
     /___| |___\
@@ -301,8 +579,10 @@ export default function Home() {
       /_/ \_\
 `}</pre>
           <div className="stat-row">
-            <span>RANK</span>
-            <strong>UNRANKED</strong>
+            <span>PLAYER</span>
+            <strong>
+              {canPlay ? player?.displayName.toUpperCase() : "NOT AUTHENTICATED"}
+            </strong>
           </div>
           <div className="stat-row">
             <span>XP</span>
@@ -318,6 +598,7 @@ export default function Home() {
         </aside>
       </section>
 
+      {canPlay ? (
       <section className="world-section" id="map">
         <div className="section-title">
           <div>
@@ -432,6 +713,52 @@ export default function Home() {
           </aside>
         </div>
       </section>
+      ) : (
+        <section className="welcome-info" id="how-it-works">
+          <div className="section-title">
+            <div>
+              <p className="eyebrow">WELCOME_PROTOCOL // READ ONLY</p>
+              <h2>HOW THE ADVENTURE WORKS</h2>
+            </div>
+            <span className="welcome-lock">[ MISSIONS LOCKED ]</span>
+          </div>
+          <div className="welcome-grid">
+            <article>
+              <span>01</span>
+              <h3>CREATE A PLAYER</h3>
+              <p>
+                Register and verify your email. Guests can read this
+                introduction, but cannot open problems or call the judge.
+              </p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>CODE LIKE VS CODE</h3>
+              <p>
+                Solve C++ missions in a real Monaco editor with automatic
+                indentation, bracket matching, nested bracket colors and a
+                minimap.
+              </p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>NEVER LOSE A RUN</h3>
+              <p>
+                Drafts, source snapshots and every evaluation stay on this
+                device and in your player database. Conflicts are always your
+                choice.
+              </p>
+            </article>
+          </div>
+          <button
+            className="primary-button welcome-register"
+            type="button"
+            onClick={() => openAccount("register")}
+          >
+            &gt; CREATE PLAYER_
+          </button>
+        </section>
+      )}
 
       <footer>
         <span>© 2026 ALGOQUEST PROJECT</span>
