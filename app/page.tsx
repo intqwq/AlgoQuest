@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
 import { AdminConsole } from "@/components/admin-console";
+import { CodexLibrary } from "@/components/codex-library";
 import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
@@ -946,6 +947,18 @@ export default function Home() {
             &gt; {copy.createPlayer}_
           </button>
         </section>
+      )}
+
+      {canPlay && (
+        <CodexLibrary
+          locale={locale}
+          questCatalog={questCatalog}
+          cleared={cleared}
+          onOpenQuest={(questId) => {
+            const quest = questCatalog.find((item) => item.id === questId);
+            if (quest) openQuest(quest);
+          }}
+        />
       )}
 
       <footer>
