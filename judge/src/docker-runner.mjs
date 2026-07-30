@@ -302,6 +302,23 @@ export async function judgeCpp14(source, quest, { onProgress } = {}) {
     const publicResult = { ...result };
     delete publicResult.compiled;
     delete publicResult.type;
+    const completedCases = publicResult.cases ?? [];
+    const acceptedCases = completedCases.filter(
+      (item) => item.verdict === "AC",
+    ).length;
+    publicResult.score = quest.tests.length
+      ? Math.round((acceptedCases / quest.tests.length) * 100)
+      : 0;
+    publicResult.passScore = Math.min(
+      100,
+      Math.max(1, Number(quest.passScore ?? 100)),
+    );
+    if (
+      completedCases.length === quest.tests.length &&
+      publicResult.score >= publicResult.passScore
+    ) {
+      publicResult.verdict = "AC";
+    }
     return publicResult;
   } finally {
     await rm(jobDir, { recursive: true, force: true });

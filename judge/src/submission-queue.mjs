@@ -15,7 +15,7 @@ export class SubmissionQueue {
     executor,
     maxParallel = 2,
     maxQueued = 1000,
-    cooldownMs = 4000,
+    cooldownMs = 5000,
     resultTtlMs = 10 * 60 * 1000,
     now = () => Date.now(),
   }) {
@@ -112,6 +112,8 @@ export class SubmissionQueue {
       queuePosition,
       pollAfterMs,
       verdict: job.verdict,
+      score: job.score,
+      passScore: job.passScore,
       compilerOutput: job.compilerOutput,
       error: job.error,
       cases: job.cases,
@@ -142,6 +144,8 @@ export class SubmissionQueue {
       this.update(job, {
         status: "DONE",
         verdict: result.verdict,
+        score: result.score,
+        passScore: result.passScore,
         compilerOutput: result.compilerOutput,
         error: result.error,
         cases: result.cases ?? job.cases,

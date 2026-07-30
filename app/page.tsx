@@ -3,9 +3,11 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
+import { AdminConsole } from "@/components/admin-console";
 import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
+  loadQuestCatalog,
   loadPlayerSave,
   PlayerSave,
   Player,
@@ -77,10 +79,12 @@ function SaveCard({
   label,
   save,
   cloud,
+  copy,
 }: {
   label: string;
   save: PlayerSave;
   cloud: boolean;
+  copy: ReturnType<typeof text>;
 }) {
   const summary = saveSummary(save);
   const latestDraft = [...save.drafts].sort(
@@ -91,35 +95,35 @@ function SaveCard({
     <div className="save-card">
       <div className="save-card__heading">
         <strong>{label}</strong>
-        <span>{cloud ? "PLAYER DATABASE" : "THIS DEVICE"}</span>
+        <span>{cloud ? copy.playerDatabase : copy.thisDevice}</span>
       </div>
       <dl>
         <div>
-          <dt>CLEARED</dt>
+          <dt>{copy.clearedCount}</dt>
           <dd>{summary.cleared} QUESTS</dd>
         </div>
         <div>
-          <dt>DRAFTS</dt>
+          <dt>{copy.draftCount}</dt>
           <dd>{summary.drafts} FILES</dd>
         </div>
         <div>
-          <dt>EVALUATIONS</dt>
+          <dt>{copy.evaluationCount}</dt>
           <dd>{summary.submissions} RECORDS</dd>
         </div>
         <div>
-          <dt>LAST UPDATE</dt>
+          <dt>{copy.lastUpdate}</dt>
           <dd>
             {Date.parse(summary.updatedAt)
               ? new Date(summary.updatedAt).toLocaleString()
-              : "EMPTY"}
+              : copy.empty}
           </dd>
         </div>
         <div>
-          <dt>LATEST CODE</dt>
+          <dt>{copy.latestCode}</dt>
           <dd>
             {latestDraft
               ? `${latestDraft.questId} // ${latestDraft.source.split("\n").length} lines`
-              : "NO DRAFT"}
+              : copy.noDraft}
           </dd>
         </div>
       </dl>
@@ -129,6 +133,7 @@ function SaveCard({
 
 export default function Home() {
   const [selected, setSelected] = useState<Quest>(quests[0]);
+  const [questCatalog, setQuestCatalog] = useState<Quest[]>(quests);
   const [locale, setLocale] = useState<Locale>("en");
   const [notice, setNotice] = useState("ACCOUNT REQUIRED // WELCOME MODE");
   const [screen, setScreen] = useState<"world" | "mission">("world");
@@ -140,8 +145,8 @@ export default function Home() {
   const [saveError, setSaveError] = useState("");
   const copy = text(locale);
   const displayedQuests = useMemo(
-    () => quests.map((quest) => localizeQuest(quest, locale)),
-    [locale],
+    () => questCatalog.map((quest) => localizeQuest(quest, locale)),
+    [locale, questCatalog],
   );
   const selectedDisplay =
     displayedQuests.find((quest) => quest.id === selected.id) ?? selected;
@@ -149,6 +154,30 @@ export default function Home() {
   const canPlay = Boolean(
     player && !player.isGuest && player.emailVerified && playerSave,
   );
+
+  const refreshQuestCatalog = useCallback(() => {
+    void loadQuestCatalog().then(({ quests: overrides, archivedQuestIds }) => {
+      const archived = new Set(archivedQuestIds);
+      const byId = new Map(overrides.map((quest) => [quest.id, quest]));
+      const merged = quests
+        .filter((quest) => !archived.has(quest.id))
+        .map((quest) => byId.get(quest.id) ?? quest);
+      for (const quest of overrides) {
+        if (!quests.some((builtIn) => builtIn.id === quest.id)) {
+          merged.push(quest);
+        }
+      }
+      merged.sort(
+        (left, right) =>
+          (left.sortOrder ?? (Number(left.index) || 9999)) -
+          (right.sortOrder ?? (Number(right.index) || 9999)),
+      );
+      setQuestCatalog(merged);
+      setSelected((current) =>
+        merged.find((quest) => quest.id === current.id) ?? merged[0] ?? current,
+      );
+    });
+  }, []);
 
   const applySave = useCallback((save: PlayerSave) => {
     persistLocalPlayerSave(save);
@@ -173,6 +202,10 @@ export default function Home() {
       setLocale(stored);
     }
   }, []);
+
+  useEffect(() => {
+    refreshQuestCatalog();
+  }, [refreshQuestCatalog]);
 
   const refreshAccountProgress = useCallback(() => {
     setSyncingSave(true);
@@ -234,7 +267,7 @@ export default function Home() {
   useEffect(() => {
     const syncScreenFromHash = () => {
       const missionId = window.location.hash.match(/^#mission\/([a-z0-9-]+)$/)?.[1];
-      const mission = quests.find(
+      const mission = questCatalog.find(
         (quest) => quest.id === missionId && quest.problem,
       );
       if (mission && canPlay && isQuestUnlocked(mission, cleared)) {
@@ -251,7 +284,7 @@ export default function Home() {
     syncScreenFromHash();
     window.addEventListener("hashchange", syncScreenFromHash);
     return () => window.removeEventListener("hashchange", syncScreenFromHash);
-  }, [canPlay, cleared]);
+  }, [canPlay, cleared, questCatalog]);
 
   const chooseSave = async (choice: "local" | "cloud") => {
     if (!saveConflict) return;
@@ -354,17 +387,17 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const playableQuests = quests.filter((quest) =>
+  const playableQuests = questCatalog.filter((quest) =>
     isQuestUnlocked(quest, cleared),
   );
   const nextQuest =
     playableQuests.find((quest) => !cleared.has(quest.id)) ??
     playableQuests.at(-1) ??
-    quests[0];
-  const nextAfterSelected = quests.find((quest) =>
+    questCatalog[0];
+  const nextAfterSelected = questCatalog.find((quest) =>
     quest.prerequisites.includes(selected.id),
   );
-  const totalXp = quests
+  const totalXp = questCatalog
     .filter((quest) => cleared.has(quest.id))
     .reduce((sum, quest) => sum + quest.xp, 0);
   const selectedPlayable = isQuestUnlocked(selected, cleared);
@@ -419,13 +452,19 @@ export default function Home() {
             onAccountSync={refreshAccountProgress}
             locale={locale}
           />
+          <AdminConsole
+            player={player}
+            locale={locale}
+            builtInQuests={quests}
+            onCatalogChange={refreshQuestCatalog}
+          />
         </div>
       </header>
 
       <div className="status-line">
         <span>ALGOQUEST_OS v0.1.0</span>
         <span className="status-message">
-          {screen === "mission" ? "MISSION MODE // JUDGE LINK ACTIVE" : notice}
+          {screen === "mission" ? copy.missionMode : notice}
         </span>
         <span>{canPlay ? copy.cloudSaveOnline : copy.welcomeMode}</span>
       </div>
@@ -445,20 +484,19 @@ export default function Home() {
             <div className="save-conflict-panel__body">
               <p className="eyebrow">{copy.saveConflict}</p>
               <h2 id="save-conflict-title">{copy.chooseSave}</h2>
-              <p>
-                Code drafts follow the save you choose. Verified judge records
-                are retained and merged so an old result cannot vanish.
-              </p>
+              <p>{copy.conflictDescription}</p>
               <div className="save-compare">
                 <SaveCard
                   label={copy.localSave}
                   save={saveConflict.local}
                   cloud={false}
+                  copy={copy}
                 />
                 <SaveCard
                   label={copy.cloudSave}
                   save={saveConflict.cloud}
                   cloud
+                  copy={copy}
                 />
               </div>
               {saveError && <p className="account-message">{saveError}</p>}
@@ -574,11 +612,11 @@ export default function Home() {
         <aside className="character-card" aria-label="Player status">
           <div className="panel-heading">
             <span>PLAYER.dat</span>
-            <span>● {canPlay ? "ONLINE" : "LOCKED"}</span>
+            <span>● {canPlay ? copy.online : copy.offlineLocked}</span>
           </div>
           <pre className="avatar" aria-hidden="true">{String.raw`
        /\_/\
-      ( o.o )   < ${canPlay ? "READY" : "LOGIN"}
+      ( o.o )   < ${canPlay ? copy.readyState : copy.loginState}
        > ^ <
      __/| |\__
     /___| |___\
@@ -586,11 +624,23 @@ export default function Home() {
       /_/ \_\
 `}</pre>
           <div className="stat-row">
-            <span>PLAYER</span>
+            <span>{copy.playerLabel}</span>
             <strong>
-              {canPlay ? player?.displayName.toUpperCase() : "NOT AUTHENTICATED"}
+              {canPlay ? player?.displayName.toUpperCase() : copy.notAuthenticated}
             </strong>
           </div>
+          {canPlay && player && (
+            <div className={`stat-row role-title role-title--${player.role}`}>
+              <span>{copy.roleLabel}</span>
+              <strong>
+                {player.role === "owner"
+                  ? copy.roleOwner
+                  : player.role === "admin"
+                    ? copy.roleAdmin
+                    : copy.rolePlayer}
+              </strong>
+            </div>
+          )}
           <div className="stat-row">
             <span>XP</span>
             <strong>{String(totalXp).padStart(3, "0")} / 420</strong>
@@ -599,8 +649,8 @@ export default function Home() {
             <span style={{ width: `${Math.min(100, (totalXp / 420) * 100)}%` }} />
           </div>
           <div className="stat-row">
-            <span>STREAK</span>
-            <strong>01 DAY</strong>
+            <span>{copy.streak}</span>
+            <strong>01 {copy.day}</strong>
           </div>
         </aside>
       </section>
@@ -638,7 +688,7 @@ export default function Home() {
 
         <div className="world-grid">
           <QuestMap
-            questStates={quests.map((quest) => {
+            questStates={questCatalog.map((quest) => {
               const playable = isQuestUnlocked(quest, cleared);
               const completed = cleared.has(quest.id);
               const displayStatus =
@@ -712,7 +762,7 @@ export default function Home() {
                   : `[ ${copy.clearQuest} ${selected.prerequisites
                       .map(
                         (questId) =>
-                          quests.find((quest) => quest.id === questId)?.index ??
+                          questCatalog.find((quest) => quest.id === questId)?.index ??
                           "??",
                       )
                       .join(" + ")} ]`}
@@ -750,8 +800,8 @@ export default function Home() {
 
       <footer>
         <span>© 2026 ALGOQUEST PROJECT</span>
-        <span>BUILD: EARLY_ACCESS // NO PAY-TO-WIN NONSENSE</span>
-        <a href="#top">[ BACK_TO_TOP ]</a>
+        <span>{copy.footerBuild}</span>
+        <a href="#top">[ {copy.backToTop} ]</a>
       </footer>
         </>
       )}

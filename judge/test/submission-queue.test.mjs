@@ -70,6 +70,35 @@ test("one owner cannot occupy multiple queue slots", () => {
   );
 });
 
+test("default submission cooldown is five seconds per player", async () => {
+  let now = 1_000;
+  const queue = new SubmissionQueue({
+    now: () => now,
+    executor: async () => ({ verdict: "AC", score: 100, cases: [] }),
+  });
+  const payload = {
+    owner: "cooldown-player",
+    source: "int main(){}",
+    language: "cpp14",
+    questId: "signal-fire",
+    quest: {},
+    mode: "submit",
+  };
+  queue.create(payload);
+  await tick();
+  await tick();
+  now += 4_999;
+  assert.throws(
+    () => queue.create(payload),
+    (error) =>
+      error instanceof QueueError &&
+      error.code === "SUBMISSION_COOLDOWN" &&
+      error.details.retryAfterMs === 1,
+  );
+  now += 1;
+  assert.doesNotThrow(() => queue.create(payload));
+});
+
 test("bounded queue rejects excess work", async () => {
   const queue = new SubmissionQueue({
     maxParallel: 1,

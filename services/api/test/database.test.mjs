@@ -45,3 +45,17 @@ test("player save migration retains source snapshots and per-quest drafts", asyn
   assert.match(migration, /CREATE TABLE IF NOT EXISTS quest_drafts/);
   assert.match(migration, /PRIMARY KEY \(user_id, quest_id\)/);
 });
+
+test("admin migration adds protected roles, quest management and server controls", async () => {
+  const migration = await readFile(
+    new URL("../migrations/004_roles_admin.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /role varchar\(16\).*DEFAULT 'player'/);
+  assert.match(migration, /CHECK \(role IN \('player', 'admin', 'owner'\)\)/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS quest_catalog/);
+  assert.match(migration, /judge_definition jsonb/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS server_settings/);
+  assert.match(migration, /submission_cooldown_seconds integer NOT NULL DEFAULT 5/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS submission_cooldowns/);
+});

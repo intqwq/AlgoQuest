@@ -115,13 +115,15 @@ export function createDatabase(databaseUrl) {
           email: null,
           emailVerified: false,
           isGuest: true,
+          role: "player",
         },
       };
     },
 
     async authenticate(token) {
       const result = await pool.query(
-        `SELECT u.id, u.display_name, u.email, u.email_verified_at, u.is_guest
+        `SELECT
+           u.id, u.display_name, u.email, u.email_verified_at, u.is_guest, u.role
            FROM sessions s
            JOIN users u ON u.id = s.user_id
           WHERE s.token_hash = $1 AND s.expires_at > now()`,
@@ -280,7 +282,8 @@ export function createDatabase(databaseUrl) {
               SET email_verified_at = COALESCE(email_verified_at, now()),
                   updated_at = now()
             WHERE id = $1
-            RETURNING id, display_name, email, email_verified_at, is_guest`,
+            RETURNING
+              id, display_name, email, email_verified_at, is_guest, role`,
           [record.rows[0].user_id],
         );
         const session = await createSessionForUser(client, record.rows[0].user_id);
@@ -296,7 +299,9 @@ export function createDatabase(databaseUrl) {
 
     async findAccountForLogin(email) {
       const result = await pool.query(
-        `SELECT id, display_name, email, password_hash, email_verified_at, is_guest
+        `SELECT
+           id, display_name, email, password_hash, email_verified_at,
+           is_guest, role
            FROM users
           WHERE lower(email) = $1 AND is_guest = false`,
         [email],
@@ -316,7 +321,8 @@ export function createDatabase(databaseUrl) {
           `UPDATE users
               SET last_login_at = now(), updated_at = now()
             WHERE id = $1
-            RETURNING id, display_name, email, email_verified_at, is_guest`,
+            RETURNING
+              id, display_name, email, email_verified_at, is_guest, role`,
           [userId],
         );
         const token = await createSessionForUser(client, userId);
@@ -400,7 +406,8 @@ export function createDatabase(databaseUrl) {
           `UPDATE users
               SET password_hash = $2, updated_at = now()
             WHERE id = $1
-            RETURNING id, display_name, email, email_verified_at, is_guest`,
+            RETURNING
+              id, display_name, email, email_verified_at, is_guest, role`,
           [record.rows[0].user_id, passwordHash],
         );
         await client.query("DELETE FROM sessions WHERE user_id = $1", [
@@ -422,7 +429,8 @@ export function createDatabase(databaseUrl) {
         `UPDATE users
             SET display_name = $2, updated_at = now()
           WHERE id = $1
-          RETURNING id, display_name, email, email_verified_at, is_guest`,
+          RETURNING
+            id, display_name, email, email_verified_at, is_guest, role`,
         [userId, displayName],
       );
       return mapPlayer(result.rows[0]);
@@ -516,7 +524,18 @@ export function createDatabase(databaseUrl) {
     },
 
     async updateSubmission(id, submission) {
-      const score = submission.verdict === "AC" ? 100 : 0;
+      const score = Math.min(
+        100,
+        Math.max(
+          0,
+          Math.round(
+            Number(
+              submission.score ??
+                (submission.verdict === "AC" ? 100 : 0),
+            ),
+          ),
+        ),
+      );
       await pool.query(
         `UPDATE submissions
             SET status = $2,
@@ -691,9 +710,335 @@ export function createDatabase(databaseUrl) {
       ]);
     },
 
+    async ensureSiteOwner(email) {
+      const result = email
+        ? await pool.query(
+            `UPDATE users
+                SET role = 'owner', updated_at = now()
+              WHERE lower(email) = lower($1)
+                AND is_guest = false
+                AND email_verified_at IS NOT NULL
+              RETURNING
+                id, display_name, email, email_verified_at, is_guest, role`,
+            [email],
+          )
+        : await pool.query(
+            `WITH candidate AS (
+               SELECT id
+                 FROM users
+                WHERE is_guest = false
+                  AND email_verified_at IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM users WHERE role = 'owner'
+                  )
+                ORDER BY created_at
+                LIMIT 1
+             )
+             UPDATE users
+                SET role = 'owner', updated_at = now()
+               FROM candidate
+              WHERE users.id = candidate.id
+              RETURNING
+                users.id,
+                users.display_name,
+                users.email,
+                users.email_verified_at,
+                users.is_guest,
+                users.role`,
+          );
+      return result.rowCount ? mapPlayer(result.rows[0]) : undefined;
+    },
+
+    async listUsers({ query = "", limit = 50, offset = 0 } = {}) {
+      const normalizedQuery = query.trim().slice(0, 120);
+      const result = await pool.query(
+        `SELECT
+           u.id,
+           u.display_name,
+           u.email,
+           u.email_verified_at,
+           u.is_guest,
+           u.role,
+           u.created_at,
+           u.updated_at,
+           u.last_login_at,
+           COUNT(DISTINCT qp.quest_id)
+             FILTER (WHERE qp.status = 'cleared')::integer AS cleared_count,
+           COUNT(DISTINCT s.id)::integer AS submission_count
+         FROM users u
+         LEFT JOIN quest_progress qp ON qp.user_id = u.id
+         LEFT JOIN submissions s ON s.user_id = u.id
+         WHERE u.is_guest = false
+           AND (
+             $1 = ''
+             OR u.display_name ILIKE '%' || $1 || '%'
+             OR COALESCE(u.email, '') ILIKE '%' || $1 || '%'
+           )
+         GROUP BY u.id
+         ORDER BY
+           CASE u.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+           u.created_at DESC
+         LIMIT $2::integer
+         OFFSET $3::integer`,
+        [normalizedQuery, Math.min(100, Math.max(1, limit)), Math.max(0, offset)],
+      );
+      return result.rows.map((row) => ({
+        ...mapPlayer(row),
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+        lastLoginAt: row.last_login_at?.toISOString() ?? null,
+        clearedCount: row.cleared_count ?? 0,
+        submissionCount: row.submission_count ?? 0,
+      }));
+    },
+
+    async findUserById(userId) {
+      const result = await pool.query(
+        `SELECT
+           id, display_name, email, email_verified_at, is_guest, role,
+           created_at, updated_at, last_login_at
+         FROM users
+         WHERE id = $1`,
+        [userId],
+      );
+      if (!result.rowCount) return undefined;
+      return {
+        ...mapPlayer(result.rows[0]),
+        createdAt: result.rows[0].created_at.toISOString(),
+        updatedAt: result.rows[0].updated_at.toISOString(),
+        lastLoginAt: result.rows[0].last_login_at?.toISOString() ?? null,
+      };
+    },
+
+    async updateManagedUser(userId, { displayName, emailVerified, role }) {
+      const result = await pool.query(
+        `UPDATE users
+            SET display_name = $2,
+                email_verified_at = CASE
+                  WHEN $3::boolean THEN COALESCE(email_verified_at, now())
+                  ELSE NULL
+                END,
+                role = $4,
+                updated_at = now()
+          WHERE id = $1 AND is_guest = false
+          RETURNING
+            id, display_name, email, email_verified_at, is_guest, role`,
+        [userId, displayName, emailVerified, role],
+      );
+      return result.rowCount ? mapPlayer(result.rows[0]) : undefined;
+    },
+
+    async listQuestRecords({ includeArchived = false } = {}) {
+      const result = await pool.query(
+        `SELECT
+           id, public_definition, judge_definition, archived,
+           created_at, updated_at
+         FROM quest_catalog
+         WHERE $1::boolean OR archived = false
+         ORDER BY
+           COALESCE((public_definition->>'sortOrder')::integer, 999999),
+           id`,
+        [includeArchived],
+      );
+      return result.rows.map(mapQuestRecord);
+    },
+
+    async getQuestRecord(questId) {
+      const result = await pool.query(
+        `SELECT
+           id, public_definition, judge_definition, archived,
+           created_at, updated_at
+         FROM quest_catalog
+         WHERE id = $1`,
+        [questId],
+      );
+      return result.rowCount ? mapQuestRecord(result.rows[0]) : undefined;
+    },
+
+    async upsertQuestRecord(
+      questId,
+      publicDefinition,
+      judgeDefinition,
+      actorId,
+    ) {
+      const result = await pool.query(
+        `INSERT INTO quest_catalog
+           (
+             id, public_definition, judge_definition, archived,
+             created_by, updated_by
+           )
+         VALUES ($1, $2::jsonb, $3::jsonb, false, $4, $4)
+         ON CONFLICT (id) DO UPDATE SET
+           public_definition = EXCLUDED.public_definition,
+           judge_definition = EXCLUDED.judge_definition,
+           archived = false,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = now()
+         RETURNING
+           id, public_definition, judge_definition, archived,
+           created_at, updated_at`,
+        [
+          questId,
+          JSON.stringify(publicDefinition),
+          judgeDefinition === null ? null : JSON.stringify(judgeDefinition),
+          actorId,
+        ],
+      );
+      return mapQuestRecord(result.rows[0]);
+    },
+
+    async archiveQuestRecord(questId, actorId) {
+      const result = await pool.query(
+        `UPDATE quest_catalog
+            SET archived = true, updated_by = $2, updated_at = now()
+          WHERE id = $1
+          RETURNING id`,
+        [questId, actorId],
+      );
+      return Boolean(result.rowCount);
+    },
+
+    async getServerSettings() {
+      const result = await pool.query(
+        `SELECT
+           registration_enabled,
+           judge_enabled,
+           maintenance_message,
+           submission_cooldown_seconds,
+           updated_at
+         FROM server_settings
+         WHERE singleton = true`,
+      );
+      const row = result.rows[0];
+      return {
+        registrationEnabled: row.registration_enabled,
+        judgeEnabled: row.judge_enabled,
+        maintenanceMessage: row.maintenance_message,
+        submissionCooldownSeconds: row.submission_cooldown_seconds,
+        updatedAt: row.updated_at.toISOString(),
+      };
+    },
+
+    async updateServerSettings(settings, actorId) {
+      const result = await pool.query(
+        `UPDATE server_settings
+            SET registration_enabled = $1,
+                judge_enabled = $2,
+                maintenance_message = $3,
+                submission_cooldown_seconds = $4,
+                updated_by = $5,
+                updated_at = now()
+          WHERE singleton = true
+          RETURNING
+            registration_enabled,
+            judge_enabled,
+            maintenance_message,
+            submission_cooldown_seconds,
+            updated_at`,
+        [
+          settings.registrationEnabled,
+          settings.judgeEnabled,
+          settings.maintenanceMessage,
+          settings.submissionCooldownSeconds,
+          actorId,
+        ],
+      );
+      const row = result.rows[0];
+      return {
+        registrationEnabled: row.registration_enabled,
+        judgeEnabled: row.judge_enabled,
+        maintenanceMessage: row.maintenance_message,
+        submissionCooldownSeconds: row.submission_cooldown_seconds,
+        updatedAt: row.updated_at.toISOString(),
+      };
+    },
+
+    async serverStatistics() {
+      const result = await pool.query(
+        `SELECT
+           (SELECT COUNT(*)::integer FROM users WHERE is_guest = false)
+             AS players,
+           (SELECT COUNT(*)::integer FROM users WHERE role = 'admin')
+             AS admins,
+           (SELECT COUNT(*)::integer FROM users WHERE role = 'owner')
+             AS owners,
+           (SELECT COUNT(*)::integer FROM submissions)
+             AS submissions,
+           (SELECT COUNT(*)::integer FROM submissions WHERE verdict = 'AC')
+             AS accepted,
+           (SELECT COUNT(*)::integer FROM quest_catalog WHERE archived = false)
+             AS quests,
+           pg_database_size(current_database())::bigint AS database_bytes`,
+      );
+      const row = result.rows[0];
+      return {
+        players: row.players,
+        admins: row.admins,
+        owners: row.owners,
+        submissions: row.submissions,
+        accepted: row.accepted,
+        quests: row.quests,
+        databaseBytes: Number(row.database_bytes),
+      };
+    },
+
+    async reserveSubmission(userId, cooldownSeconds) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const previous = await client.query(
+          `SELECT
+             GREATEST(
+               0,
+               CEIL(
+                 EXTRACT(
+                   EPOCH FROM
+                     last_submitted_at
+                     + ($2::integer * interval '1 second')
+                     - now()
+                 ) * 1000
+               )
+             )::integer AS retry_after_ms
+           FROM submission_cooldowns
+           WHERE user_id = $1
+           FOR UPDATE`,
+          [userId, cooldownSeconds],
+        );
+        const retryAfterMs = previous.rows[0]?.retry_after_ms ?? 0;
+        if (retryAfterMs > 0) {
+          await client.query("ROLLBACK");
+          return { allowed: false, retryAfterMs };
+        }
+        await client.query(
+          `INSERT INTO submission_cooldowns(user_id, last_submitted_at)
+           VALUES ($1, now())
+           ON CONFLICT (user_id) DO UPDATE SET last_submitted_at = now()`,
+          [userId],
+        );
+        await client.query("COMMIT");
+        return { allowed: true, retryAfterMs: 0 };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
     async close() {
       await pool.end();
     },
+  };
+}
+
+function mapQuestRecord(row) {
+  return {
+    id: row.id,
+    publicDefinition: row.public_definition,
+    judgeDefinition: row.judge_definition,
+    archived: row.archived,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
   };
 }
 
@@ -704,6 +1049,7 @@ function mapPlayer(row) {
     email: row.email ?? null,
     emailVerified: Boolean(row.email_verified_at),
     isGuest: row.is_guest,
+    role: row.role ?? "player",
   };
 }
 

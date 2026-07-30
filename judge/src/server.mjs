@@ -6,7 +6,7 @@ import { QueueError, SubmissionQueue } from "./submission-queue.mjs";
 const port = Number(process.env.PORT ?? 8788);
 const maxParallel = Math.max(1, Number(process.env.JUDGE_MAX_PARALLEL ?? 2));
 const maxQueued = Math.max(1, Number(process.env.JUDGE_QUEUE_CAPACITY ?? 1000));
-const cooldownMs = Math.max(0, Number(process.env.JUDGE_COOLDOWN_MS ?? 4000));
+const cooldownMs = Math.max(5000, Number(process.env.JUDGE_COOLDOWN_MS ?? 5000));
 const resultTtlMs = Math.max(
   60_000,
   Number(process.env.JUDGE_RESULT_TTL_MS ?? 10 * 60 * 1000),
@@ -49,7 +49,7 @@ async function readJson(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 70 * 1024) throw new Error("PAYLOAD_TOO_LARGE");
+    if (size > 4 * 1024 * 1024) throw new Error("PAYLOAD_TOO_LARGE");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -69,7 +69,51 @@ function selectedQuest(quest, mode) {
   if (mode !== "sample") return quest;
   return {
     ...quest,
+    passScore: 100,
     tests: quest.tests.slice(0, 1),
+  };
+}
+
+function trustedQuest(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.tests)) {
+    return undefined;
+  }
+  const tests = value.tests.slice(0, 50).map((test, index) => {
+    if (
+      !test ||
+      typeof test.input !== "string" ||
+      typeof test.expected !== "string" ||
+      Buffer.byteLength(test.input, "utf8") > 64 * 1024 ||
+      Buffer.byteLength(test.expected, "utf8") > 64 * 1024
+    ) {
+      throw new Error("INVALID_TRUSTED_QUEST");
+    }
+    return {
+      id: String(index + 1).padStart(2, "0"),
+      input: test.input,
+      expected: test.expected,
+    };
+  });
+  if (!tests.length) throw new Error("INVALID_TRUSTED_QUEST");
+  return {
+    language: "cpp14",
+    timeLimitMs: Math.min(
+      10_000,
+      Math.max(100, Math.round(Number(value.timeLimitMs) || 1000)),
+    ),
+    memoryLimitMb: Math.min(
+      512,
+      Math.max(16, Math.round(Number(value.memoryLimitMb) || 64)),
+    ),
+    compileLimitMs: Math.min(
+      30_000,
+      Math.max(5000, Math.round(Number(value.compileLimitMs) || 15_000)),
+    ),
+    passScore: Math.min(
+      100,
+      Math.max(1, Math.round(Number(value.passScore) || 100)),
+    ),
+    tests,
   };
 }
 
@@ -112,7 +156,9 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const body = await readJson(request);
-    const quest = quests[body.questId];
+    const dynamicQuest =
+      apiToken && body.trustedQuest ? trustedQuest(body.trustedQuest) : undefined;
+    const quest = dynamicQuest ?? quests[body.questId];
     if (!quest) return json(response, 404, { error: "UNKNOWN_QUEST" });
     if (body.language !== "cpp14") {
       return json(response, 400, { error: "UNSUPPORTED_LANGUAGE" });

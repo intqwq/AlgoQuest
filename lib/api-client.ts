@@ -1,9 +1,12 @@
+import type { Quest } from "@/lib/quests";
+
 export type Player = {
   id: string;
   displayName: string;
   email: string | null;
   emailVerified: boolean;
   isGuest: boolean;
+  role: "player" | "admin" | "owner";
 };
 
 type SessionResponse = {
@@ -14,6 +17,60 @@ type SessionResponse = {
 export type AuthConfig = {
   turnstileSiteKey: string;
   emailDelivery: "resend" | "local-log";
+  registrationEnabled: boolean;
+  maintenanceMessage: string;
+};
+
+export type ManagedPlayer = Player & {
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt: string | null;
+  clearedCount: number;
+  submissionCount: number;
+};
+
+export type JudgeQuestDefinition = {
+  language: "cpp14";
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  compileLimitMs: number;
+  passScore: number;
+  tests: Array<{ id: string; input: string; expected: string }>;
+};
+
+export type AdminQuestRecord = {
+  id: string;
+  publicDefinition: Quest;
+  judgeDefinition: JudgeQuestDefinition | null;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ServerOverview = {
+  settings: {
+    registrationEnabled: boolean;
+    judgeEnabled: boolean;
+    maintenanceMessage: string;
+    submissionCooldownSeconds: number;
+    updatedAt: string;
+  };
+  statistics: {
+    players: number;
+    admins: number;
+    owners: number;
+    submissions: number;
+    accepted: number;
+    quests: number;
+    databaseBytes: number;
+  };
+  runtime: {
+    node: string;
+    platform: string;
+    architecture: string;
+    uptimeSeconds: number;
+    judge: Record<string, unknown>;
+  };
 };
 
 export type QuestProgress = {
@@ -217,6 +274,118 @@ export async function loadCurrentPlayer(): Promise<Player | undefined> {
   }
   const body = (await response.json()) as { player: Player };
   return body.player;
+}
+
+export async function loadQuestCatalog(): Promise<{
+  quests: Quest[];
+  archivedQuestIds: string[];
+}> {
+  const response = await retryingFetch(apiUrl("/quests"), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) return { quests: [], archivedQuestIds: [] };
+  const body = (await response.json()) as {
+    quests?: Quest[];
+    archivedQuestIds?: string[];
+  };
+  return {
+    quests: Array.isArray(body.quests) ? body.quests : [],
+    archivedQuestIds: Array.isArray(body.archivedQuestIds)
+      ? body.archivedQuestIds
+      : [],
+  };
+}
+
+async function adminJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await authenticatedFetch(apiUrl(path), init);
+  const body = (await response.json().catch(() => ({}))) as {
+    error?: string;
+  } & T;
+  if (!response.ok) {
+    throw new AuthApiError(body.error ?? "ADMIN_REQUEST_FAILED", response.status);
+  }
+  return body;
+}
+
+export async function loadManagedPlayers(query = "") {
+  const body = await adminJson<{ users: ManagedPlayer[] }>(
+    `/admin/users?query=${encodeURIComponent(query)}`,
+    { headers: { accept: "application/json" } },
+  );
+  return body.users;
+}
+
+export async function updateManagedPlayer(
+  playerId: string,
+  update: {
+    displayName: string;
+    emailVerified: boolean;
+    role: "player" | "admin";
+  },
+) {
+  const body = await adminJson<{ player: ManagedPlayer }>(
+    `/admin/users/${encodeURIComponent(playerId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(update),
+    },
+  );
+  return body.player;
+}
+
+export async function loadAdminQuests() {
+  const body = await adminJson<{ quests: AdminQuestRecord[] }>("/admin/quests", {
+    headers: { accept: "application/json" },
+  });
+  return body.quests;
+}
+
+export async function saveAdminQuest(
+  questId: string,
+  publicDefinition: Quest,
+  judgeDefinition: JudgeQuestDefinition | null,
+  create: boolean,
+) {
+  const body = await adminJson<{ quest: AdminQuestRecord }>(
+    create ? "/admin/quests" : `/admin/quests/${encodeURIComponent(questId)}`,
+    {
+      method: create ? "POST" : "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: questId,
+        publicDefinition,
+        judgeDefinition,
+      }),
+    },
+  );
+  return body.quest;
+}
+
+export async function archiveAdminQuest(questId: string) {
+  await adminJson<Record<string, never>>(
+    `/admin/quests/${encodeURIComponent(questId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function loadServerOverview() {
+  return adminJson<ServerOverview>("/owner/server", {
+    headers: { accept: "application/json" },
+  });
+}
+
+export async function updateServerSettings(
+  settings: Omit<ServerOverview["settings"], "updatedAt">,
+) {
+  const body = await adminJson<{
+    settings: ServerOverview["settings"];
+  }>("/owner/server", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  return body.settings;
 }
 
 export async function requireCurrentPlayer(): Promise<Player> {

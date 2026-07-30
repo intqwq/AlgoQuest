@@ -61,7 +61,7 @@ export function QuestMap({
     y: number;
     originX: number;
     originY: number;
-  }>();
+  } | undefined>(undefined);
 
   const byId = useMemo(
     () => new Map(questStates.map((item) => [item.base.id, item.base])),
@@ -122,6 +122,7 @@ export function QuestMap({
     <div
       className={`quest-map-viewport ${dragging ? "is-dragging" : ""}`}
       aria-label="Quest map"
+      style={{ backgroundPosition: `${pan.x}px ${pan.y}px` }}
       onPointerDown={startDrag}
       onPointerMove={moveDrag}
       onPointerUp={stopDrag}

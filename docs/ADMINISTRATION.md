@@ -1,0 +1,61 @@
+# AlgoQuest administration
+
+AlgoQuest has three account roles:
+
+- `player`: plays quests, keeps cloud/local saves, drafts and submissions.
+- `admin`: can inspect and update player profiles, and create, edit or archive quests.
+- `owner`: has every admin permission plus server status and safe runtime controls.
+
+Role checks are enforced by the Core API. Hiding a button in the browser is not
+treated as authorization.
+
+## First site owner
+
+Set `SITE_OWNER_EMAIL` in the deployment environment to the verified AlgoQuest
+account that should receive the owner role:
+
+```dotenv
+SITE_OWNER_EMAIL=owner@example.com
+```
+
+When this value is omitted and no owner exists, the oldest verified non-guest
+account is promoted once. After an owner exists, later accounts are never
+promoted automatically.
+
+An owner may promote players to admins or return admins to the player role.
+Owners cannot be created, demoted or edited through ordinary admin endpoints.
+
+## Quest management
+
+Built-in quests keep their hidden tests inside the Judge service. Admins can
+change their public title, story, guidance, limits, prerequisites and map
+position without exposing those tests.
+
+New custom quests require:
+
+- English public content plus optional Simplified Chinese and Japanese content;
+- starter code, sample input/output and step-by-step guidance;
+- one to fifty trusted input/expected-output test pairs;
+- a pass score from 1 to 100;
+- C++14 time and memory limits.
+
+Custom hidden tests are stored in PostgreSQL and are sent only from the Core API
+to the token-protected Judge service. They are never returned by the public
+quest catalog endpoint.
+
+Archiving is the safe form of removing a quest. It disappears from the player
+map and cannot be submitted, while existing drafts, submissions and progress
+remain available for audit.
+
+## Owner server controls
+
+The owner console exposes:
+
+- registration enable/disable;
+- Judge enable/disable;
+- maintenance message;
+- submission cooldown, with a hard minimum of five seconds;
+- safe runtime metadata, queue health and aggregate database counts.
+
+It does not expose a shell, Docker socket, environment secrets or arbitrary
+process control.

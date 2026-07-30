@@ -31,6 +31,8 @@ type CaseResult = {
 type JudgeResponse = {
   submissionId: string;
   verdict: Verdict;
+  score: number;
+  passScore: number;
   compilerOutput?: string;
   error?: string;
   cases: Array<{
@@ -50,6 +52,8 @@ type Submission = {
   queuePosition: number;
   pollAfterMs?: number;
   verdict?: Verdict;
+  score?: number;
+  passScore?: number;
   compilerOutput?: string;
   error?: string;
   cases: JudgeResponse["cases"];
@@ -90,6 +94,14 @@ const missionMessages = {
     allPassed: "All test cases passed.",
     continue: "RETURN TO MAP",
     fullRun: "Every test case runs even after one fails.",
+    passScore: "PASS SCORE",
+    submittedScore: "SUBMITTED SCORE",
+    cooldown: "COOLDOWN",
+    ready: "READY",
+    status: "STATUS",
+    evaluations: "SUBMISSION HISTORY",
+    noEvaluations: "NO EVALUATIONS RECORDED FOR THIS QUEST.",
+    autosave: "autosave: code + evaluations // device + cloud",
   },
   "zh-CN": {
     worldMap: "世界地图",
@@ -112,6 +124,14 @@ const missionMessages = {
     allPassed: "所有测试点均已通过。",
     continue: "返回地图",
     fullRun: "即使某个测试点失败，其余测试点仍会全部评测。",
+    passScore: "通过分数",
+    submittedScore: "本次得分",
+    cooldown: "提交冷却",
+    ready: "就绪",
+    status: "状态",
+    evaluations: "评测历史",
+    noEvaluations: "本关暂无评测记录。",
+    autosave: "自动保存：代码与评测记录 // 本地 + 云端",
   },
   ja: {
     worldMap: "ワールドマップ",
@@ -134,6 +154,14 @@ const missionMessages = {
     allPassed: "すべてのテストケースに合格しました。",
     continue: "マップへ戻る",
     fullRun: "一つ失敗しても、残りのテストケースをすべて実行します。",
+    passScore: "合格点",
+    submittedScore: "今回の得点",
+    cooldown: "クールダウン",
+    ready: "準備完了",
+    status: "状態",
+    evaluations: "提出履歴",
+    noEvaluations: "このクエストの評価履歴はありません。",
+    autosave: "自動保存：コードと評価 // 端末 + クラウド",
   },
 } as const;
 
@@ -243,6 +271,8 @@ async function requestJudge(
   return {
     submissionId: submission.id,
     verdict: submission.verdict,
+    score: submission.score ?? (submission.verdict === "AC" ? 100 : 0),
+    passScore: submission.passScore ?? 100,
     compilerOutput: submission.compilerOutput,
     error: submission.error,
     cases: submission.cases,
@@ -293,10 +323,20 @@ export function MissionTerminal({
   );
   const [hintOpen, setHintOpen] = useState(false);
   const [acceptedDialog, setAcceptedDialog] = useState(false);
+  const [latestScore, setLatestScore] = useState(0);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [guideProgress, setGuideProgress] = useState(0);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [editorReady, setEditorReady] = useState(false);
   const copy = missionMessages[locale];
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      setCooldownSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldownSeconds]);
 
   useEffect(() => {
     let active = true;
@@ -438,7 +478,7 @@ export function MissionTerminal({
       questId: quest.id,
       status: "DONE",
       verdict: response.verdict,
-      score: response.verdict === "AC" ? 100 : 0,
+      score: response.score,
       source: code,
       language: "cpp14",
       mode,
@@ -449,7 +489,11 @@ export function MissionTerminal({
   };
 
   const runSample = async () => {
-    if (["queued", "compiling", "running"].includes(judgeState)) return;
+    if (
+      ["queued", "compiling", "running"].includes(judgeState) ||
+      cooldownSeconds > 0
+    ) return;
+    setCooldownSeconds(5);
     setGuideProgress((current) => Math.max(current, 2));
     setJudgeState("queued");
     setConsoleText("$ run --sample\n> Creating an isolated judge job...");
@@ -505,7 +549,11 @@ export function MissionTerminal({
   };
 
   const submit = async () => {
-    if (["queued", "compiling", "running"].includes(judgeState)) return;
+    if (
+      ["queued", "compiling", "running"].includes(judgeState) ||
+      cooldownSeconds > 0
+    ) return;
+    setCooldownSeconds(5);
     setGuideProgress((current) => Math.max(current, 4));
     setJudgeState("queued");
     setResults(emptyResults());
@@ -532,6 +580,7 @@ export function MissionTerminal({
             : { id, verdict: "WAIT" };
         }),
       );
+      setLatestScore(response.score);
 
       if (response.verdict === "AC") {
         const maxTime = Math.max(...response.cases.map((item) => item.timeMs));
@@ -542,9 +591,9 @@ export function MissionTerminal({
         setGuideProgress(problem.guidance.length);
         setAcceptedDialog(true);
         setConsoleText(
-          `$ verdict\n[ ACCEPTED ] ${response.cases.length} / ${response.cases.length} cases\nTIME   ${maxTime} ms max\nMEMORY ${formatMemory(maxMemory)} max\nSCORE  100 / 100\nREWARD +${quest.xp} XP`,
+          `$ verdict\n[ ACCEPTED ] ${response.cases.filter((item) => item.verdict === "AC").length} / ${response.cases.length} cases\nTIME   ${maxTime} ms max\nMEMORY ${formatMemory(maxMemory)} max\nSCORE  ${response.score} / 100\nPASS   ${response.passScore} / 100\nREWARD +${quest.xp} XP`,
         );
-        onComplete(quest.id, 100);
+        onComplete(quest.id, response.score);
       } else {
         setJudgeState("failed");
         setConsoleText(formatFailure(response));
@@ -777,9 +826,9 @@ export function MissionTerminal({
             <span className={`judge-light judge-light--${judgeState}`} />
           </div>
           <div className="judge-summary">
-            <span>STATUS</span>
+            <span>{copy.status}</span>
             <strong>
-              {judgeState === "idle" && "READY"}
+              {judgeState === "idle" && copy.ready}
               {judgeState === "queued" && "QUEUED"}
               {judgeState === "compiling" && "COMPILING"}
               {judgeState === "running" && "RUNNING"}
@@ -787,6 +836,22 @@ export function MissionTerminal({
               {judgeState === "failed" && "FAILED"}
               {judgeState === "offline" && "OFFLINE"}
             </strong>
+          </div>
+
+          <div className="judge-score-card">
+            <div>
+              <span>{copy.submittedScore}</span>
+              <strong>{latestScore} / 100</strong>
+            </div>
+            <div className="judge-score-track" aria-label={`${latestScore} / 100`}>
+              <i style={{ width: `${latestScore}%` }} />
+              <b
+                style={{
+                  left: `${Math.min(100, Math.max(0, problem.passScore))}%`,
+                }}
+              />
+            </div>
+            <p>{copy.passScore}: {problem.passScore} / 100</p>
           </div>
 
           <div className="case-list">
@@ -814,7 +879,7 @@ export function MissionTerminal({
 
           <div className="submission-history">
             <div className="submission-history__title">
-              <span>SUBMISSION HISTORY</span>
+              <span>{copy.evaluations}</span>
               <strong>{questHistory.length.toString().padStart(2, "0")}</strong>
             </div>
             {questHistory.length ? (
@@ -841,7 +906,7 @@ export function MissionTerminal({
                 </button>
               ))
             ) : (
-              <p>NO EVALUATIONS RECORDED FOR THIS QUEST.</p>
+              <p>{copy.noEvaluations}</p>
             )}
           </div>
 
@@ -861,21 +926,32 @@ export function MissionTerminal({
       </div>
 
       <div className="mission-actions">
-        <span>autosave: code + evaluations // device + cloud</span>
+        <span>{copy.autosave}</span>
         <div>
-          <button className="sample-button" onClick={runSample}>
-            &gt; {copy.runSample}
+          <button
+            className="sample-button"
+            onClick={runSample}
+            disabled={cooldownSeconds > 0}
+          >
+            &gt; {cooldownSeconds > 0 ? `${copy.cooldown} ${cooldownSeconds}s` : copy.runSample}
           </button>
           <button
             className="submit-button"
             onClick={submit}
-            disabled={["queued", "compiling", "running"].includes(judgeState)}
+            disabled={
+              cooldownSeconds > 0 ||
+              ["queued", "compiling", "running"].includes(judgeState)
+            }
           >
             {judgeState === "queued" && `[ ${copy.queued} ]`}
             {judgeState === "compiling" && `[ ${copy.compiling} ]`}
             {judgeState === "running" && `[ ${copy.judging} ]`}
             {!["queued", "compiling", "running"].includes(judgeState) &&
-              `[ ${copy.submit} ]`}
+              `[ ${
+                cooldownSeconds > 0
+                  ? `${copy.cooldown} ${cooldownSeconds}s`
+                  : copy.submit
+              } ]`}
           </button>
         </div>
       </div>

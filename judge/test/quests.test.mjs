@@ -20,3 +20,34 @@ test("the first campaign chapter has complete hidden test suites", () => {
     quests["echo-loop"].tests.some((item) => item.input === "1\n"),
   );
 });
+
+test("all twelve campaign quests have complete trusted Judge suites", () => {
+  const campaignIds = [
+    "signal-fire",
+    "forked-path",
+    "echo-loop",
+    "array-vault",
+    "sorting-ruins",
+    "binary-gate",
+    "prefix-beacon",
+    "stack-sentinel",
+    "grid-rescue",
+    "dijkstra-citadel",
+    "union-forge",
+    "topological-crown",
+  ];
+  assert.equal(Object.keys(quests).length, campaignIds.length);
+  for (const questId of campaignIds) {
+    assert.ok(quests[questId], `${questId} is registered`);
+    assert.ok(quests[questId].tests.length >= 4, `${questId} has hidden tests`);
+    assert.ok(
+      quests[questId].tests.every(
+        (item, index) =>
+          item.id === String(index + 1).padStart(2, "0") &&
+          typeof item.input === "string" &&
+          typeof item.expected === "string",
+      ),
+      `${questId} has normalized tests`,
+    );
+  }
+});

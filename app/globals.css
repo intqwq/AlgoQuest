@@ -733,20 +733,6 @@ a {
   box-shadow: 7px 7px 0 var(--green-dark);
 }
 
-.quest-node.is-completed .node-core::after {
-  content: "✓";
-  position: absolute;
-  transform: translate(24px, -22px);
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  color: var(--paper);
-  background: var(--green-dark);
-  border: 1px solid var(--ink);
-  font-size: 10px;
-}
-
 .quest-node--locked {
   color: #74736e;
   border-color: #74736e;
@@ -1809,6 +1795,471 @@ footer a {
 .judge-summary span,
 .judge-summary strong {
   display: block;
+}
+
+.judge-score-card {
+  padding: 14px 16px;
+  border-bottom: 2px solid var(--ink);
+  background: #eee9dd;
+}
+
+.judge-score-card > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.judge-score-card span,
+.judge-score-card p {
+  color: #69675f;
+  font-size: 11px;
+}
+
+.judge-score-card strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.judge-score-track {
+  height: 16px;
+  position: relative;
+  margin: 10px 0 7px;
+  overflow: visible;
+  border: 2px solid var(--ink);
+  background: #c8c3b8;
+}
+
+.judge-score-track i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--pink), var(--amber), var(--green));
+  transition: width 360ms ease;
+}
+
+.judge-score-track b {
+  width: 3px;
+  height: 24px;
+  position: absolute;
+  top: -6px;
+  background: var(--ink);
+  transform: translateX(-1px);
+}
+
+.judge-score-card p {
+  margin: 0;
+  font-weight: 800;
+}
+
+.player-chip--admin {
+  color: #ff7070;
+  border-color: #9d1d2c;
+  box-shadow: 3px 3px 0 #9d1d2c;
+}
+
+.player-chip--owner {
+  color: #ffd86a;
+  border-color: #b98300;
+  box-shadow: 3px 3px 0 #b98300;
+}
+
+.role-title--admin strong {
+  color: #b51f36;
+}
+
+.role-title--owner strong {
+  color: #9a6900;
+  text-shadow: 0 0 10px rgba(230, 181, 34, 0.3);
+}
+
+.admin-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(10, 12, 11, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.admin-console {
+  width: min(1260px, 100%);
+  height: min(860px, calc(100vh - 36px));
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 3px solid #8e1e2c;
+  background: var(--paper);
+  box-shadow: 12px 12px 0 #8e1e2c;
+}
+
+.admin-console--owner {
+  border-color: #b98300;
+  box-shadow: 12px 12px 0 #b98300;
+}
+
+.admin-console > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 15px 20px;
+  color: var(--paper);
+  background: #261518;
+}
+
+.admin-console--owner > header {
+  color: #ffdc78;
+  background: #211b0d;
+}
+
+.admin-console > header span {
+  color: #ff7d88;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.admin-console--owner > header span {
+  color: #ffdc78;
+}
+
+.admin-console > header h2 {
+  margin: 4px 0 0;
+  font: 900 25px/1 Arial, sans-serif;
+}
+
+.admin-console button {
+  cursor: pointer;
+}
+
+.admin-console > header button,
+.admin-console > nav button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-weight: 900;
+}
+
+.admin-console > nav {
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 2px solid var(--ink);
+  background: #d9d3c6;
+}
+
+.admin-console > nav button {
+  min-height: 34px;
+  padding: 0 13px;
+  color: #55534e;
+  border: 1px solid transparent;
+}
+
+.admin-console > nav button.is-active {
+  color: var(--paper);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.admin-message {
+  margin: 0;
+  padding: 8px 18px;
+  color: #8c1930;
+  border-bottom: 1px dashed #8c1930;
+  background: #ffdde2;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.admin-search {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.admin-search input {
+  flex: 1;
+}
+
+.admin-console input,
+.admin-console select,
+.admin-console textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  background: #fbf8f0;
+  font: inherit;
+}
+
+.admin-console textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.admin-console label {
+  display: grid;
+  gap: 6px;
+  color: #5e5b55;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.managed-player-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.managed-player {
+  display: grid;
+  gap: 11px;
+  padding: 15px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+
+.managed-player--admin {
+  border-color: #9d1d2c;
+  box-shadow: 5px 5px 0 #9d1d2c;
+}
+
+.managed-player--owner {
+  border-color: #b98300;
+  box-shadow: 5px 5px 0 #b98300;
+}
+
+.managed-player__heading,
+.managed-player__stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.managed-player__heading span {
+  color: #a21f38;
+  font-weight: 900;
+}
+
+.managed-player--owner .managed-player__heading span {
+  color: #9d6d00;
+}
+
+.managed-player code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.managed-player__stats {
+  color: #69655d;
+  font-size: 10px;
+}
+
+.admin-check {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.admin-check input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.admin-quest-layout {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  gap: 18px;
+  overflow: hidden;
+}
+
+.admin-quest-list {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--ink);
+  background: #d6d0c3;
+}
+
+.admin-quest-list > button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 4px 8px;
+  padding: 11px;
+  border: 0;
+  border-bottom: 1px dashed #8d8980;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.admin-quest-list > button.is-active {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.admin-quest-list small {
+  grid-column: 2;
+  color: #737069;
+}
+
+.admin-quest-list > button.is-active small {
+  color: var(--green);
+}
+
+.admin-quest-list .admin-add-quest {
+  display: block;
+  color: var(--paper);
+  background: var(--green-dark);
+  font-weight: 900;
+  text-align: center;
+}
+
+.admin-quest-form {
+  min-height: 0;
+  display: grid;
+  gap: 13px;
+  overflow: auto;
+  padding: 18px;
+  border: 2px solid var(--ink);
+}
+
+.admin-quest-form h3 {
+  margin: 0;
+  font: 900 24px/1 Arial, sans-serif;
+}
+
+.admin-section-label {
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  color: var(--green);
+  background: var(--ink);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-code-input {
+  min-height: 190px !important;
+  color: #c9f2db !important;
+  background: #171918 !important;
+  font: 11px/1.5 "Cascadia Mono", Consolas, monospace !important;
+}
+
+.admin-tests-input {
+  min-height: 260px !important;
+}
+
+.admin-secure-note {
+  margin: 0;
+  padding: 10px;
+  border: 1px dashed #8a8275;
+  color: #605c55;
+  font-size: 10px;
+}
+
+.admin-quest-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.admin-quest-actions button,
+.owner-server > button,
+.managed-player > button,
+.admin-search button {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 2px solid var(--ink);
+  color: var(--paper);
+  background: var(--ink);
+  font-weight: 900;
+}
+
+.admin-quest-actions .is-danger {
+  border-color: #9d1d2c;
+  background: #9d1d2c;
+}
+
+.admin-empty {
+  display: grid;
+  place-items: center;
+  border: 2px dashed #8d8980;
+  color: #68655e;
+}
+
+.owner-server {
+  display: grid;
+  gap: 16px;
+}
+
+.server-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.server-stat-grid > div {
+  padding: 14px;
+  border: 2px solid #b98300;
+  background: #fff7d7;
+  box-shadow: 4px 4px 0 #b98300;
+}
+
+.server-stat-grid span,
+.server-stat-grid strong {
+  display: block;
+}
+
+.server-stat-grid span {
+  color: #746227;
+  font-size: 9px;
+}
+
+.server-stat-grid strong {
+  margin-top: 7px;
+  font-size: 22px;
+}
+
+.server-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.server-runtime code {
+  padding: 6px 8px;
+  color: #ffdc78;
+  background: #211b0d;
+}
+
+@media (max-width: 840px) {
+  .admin-quest-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .admin-quest-list {
+    max-height: 220px;
+  }
+
+  .admin-form-grid,
+  .server-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .judge-summary span {
