@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .reliability-final/part-* | base64 --decode > /tmp/reliability-final.tgz
+          cat .reliability-final/chunk-* | base64 --decode > /tmp/reliability-final.tgz
           echo '37d3297d7129580f155b3bf76f02ccb02a035f04a7fc1169351d240fa9f3af7a  /tmp/reliability-final.tgz' | sha256sum --check
           tar -xzf /tmp/reliability-final.tgz
 
