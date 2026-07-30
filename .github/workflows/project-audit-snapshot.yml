@@ -37,3 +37,18 @@ jobs:
           name: algoquest-project-audit
           path: /tmp/algoquest-audit
           retention-days: 1
+      - name: Diagnose isolated Judge runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
+          JUDGE_COMPILE_CACHE_ENTRIES=0 node --input-type=module <<'NODE'
+          import { judgeCpp14 } from './judge/src/docker-runner.mjs';
+          import { quests } from './judge/src/quests.mjs';
+          const source = `#include <bits/stdc++.h>
+          using namespace std;
+          int main(){ long long a,b; cin>>a>>b; cout<<a+b<<'\\n'; }`;
+          const result = await judgeCpp14(source, quests['signal-fire']);
+          console.log('JUDGE_DIAGNOSTIC=' + JSON.stringify(result));
+          if (result.verdict !== 'AC') process.exitCode = 1;
+          NODE
