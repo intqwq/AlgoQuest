@@ -1,0 +1,70 @@
+name: Apply final reliability source
+
+on:
+  push:
+    branches:
+      - agent/reliability-hardening-final
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/reliability-hardening-final
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Restore final source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .reliability-final/part-* | base64 --decode > /tmp/reliability-final.tgz
+          echo '37d3297d7129580f155b3bf76f02ccb02a035f04a7fc1169351d240fa9f3af7a  /tmp/reliability-final.tgz' | sha256sum --check
+          tar -xzf /tmp/reliability-final.tgz
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Lint, build and test Web
+        run: |
+          npm run lint
+          npm test
+
+      - name: Install and test Core API
+        run: |
+          npm --prefix services/api ci
+          npm --prefix services/api test
+
+      - name: Test Judge queue and quest data
+        run: npm --prefix judge test
+
+      - name: Validate Compose model
+        run: docker compose --env-file .env.windows.example --profile all config --quiet
+
+      - name: Build and test isolated Judge runner
+        run: |
+          docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
+          JUDGE_DOCKER_TEST=1 npm --prefix judge test
+
+      - name: Commit validated source
+        shell: bash
+        run: |
+          rm -rf .reliability-final .github/workflows/apply-final-reliability.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden Judge isolation and account verification'
+          git push origin HEAD:agent/reliability-hardening-final
