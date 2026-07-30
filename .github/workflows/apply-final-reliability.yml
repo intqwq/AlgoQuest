@@ -34,7 +34,9 @@ jobs:
           declare -A expected=(
             [chunk-00]=89663ce00ef88281f3ac06cfeceb8491be523795
             [chunk-01]=e33f1836f712e3abe0aa37a90941ad43299356ce
-            [chunk-02]=8890fd9b1672fbfaa997f51e1efeaa8a51c55bc9
+            [chunk-02a]=18899ff0839f8735342ae424a15fd95a6ee87b64
+            [chunk-02b]=b420cbe7f99fa370545ad89c9331af59c4bc0dfe
+            [chunk-02c]=8e38a09348f2163ca2c306fbb8f2de0b190ae770
             [chunk-03]=b439531d8e02c480ce0196698b59514915314578
             [chunk-04]=48fcd311987995934fc101001b41335a06c2576f
             [chunk-05]=f5d8d0be8fad7721886b6546d41d0b9acfbdee83
