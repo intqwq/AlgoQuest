@@ -1,0 +1,36 @@
+name: Project audit snapshot
+
+on:
+  push:
+    branches:
+      - agent/project-audit-snapshot
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build audit inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/algoquest-audit
+          find . -path './.git' -prune -o -type f -print | sort > /tmp/algoquest-audit/file-list.txt
+          grep -RInE 'TODO|FIXME|XXX|HACK|NOT_IMPLEMENTED|not implemented|coming soon|placeholder|stub|throw new Error|return null' \
+            --exclude-dir=.git --exclude-dir=node_modules --exclude='package-lock.json' . \
+            > /tmp/algoquest-audit/markers.txt || true
+          grep -RInE 'disabled|offline|experimental|legacy|deprecated|future|next milestone' \
+            --exclude-dir=.git --exclude-dir=node_modules --exclude='package-lock.json' docs README.md .github compose.yml \
+            > /tmp/algoquest-audit/deferred.txt || true
+          cp package.json /tmp/algoquest-audit/root-package.json
+          cp services/api/package.json /tmp/algoquest-audit/api-package.json
+          cp judge/package.json /tmp/algoquest-audit/judge-package.json
+          tar --exclude=.git --exclude=node_modules -czf /tmp/algoquest-audit/algoquest-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: algoquest-project-audit
+          path: /tmp/algoquest-audit
+          retention-days: 1
