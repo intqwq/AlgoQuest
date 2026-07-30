@@ -1,0 +1,89 @@
+name: Polish page transition implementation
+
+on:
+  push:
+    branches:
+      - agent/editorial-rules-page-transitions
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Polish TSX formatting and transition cost
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected one match in {path}, found {count}: {old!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          editorial = "components/editorial-panel.tsx"
+          replace_once(
+              editorial,
+              '''            <p>
+    {kind === "discussion"
+      ? copy.discussionHint
+      : eligibility.directPublish
+        ? copy.directHint
+        : copy.solutionModerationHint}
+  </p>''',
+              '''            <p>
+              {kind === "discussion"
+                ? copy.discussionHint
+                : eligibility.directPublish
+                  ? copy.directHint
+                  : copy.solutionModerationHint}
+            </p>''',
+          )
+          replace_once(
+              editorial,
+              '''              [ {kind === "discussion" || eligibility.directPublish
+      ? copy.publish
+      : copy.submitReview} ]''',
+              '''              [
+              {kind === "discussion" || eligibility.directPublish
+                ? copy.publish
+                : copy.submitReview}
+              ]''',
+          )
+
+          css = Path("app/globals.css")
+          text = css.read_text(encoding="utf-8")
+          text = text.replace("\n\n\n/* Unified page transitions */", "\n\n/* Unified page transitions */", 1)
+          text = text.replace("    filter: blur(3px);\n", "", 1)
+          text = text.replace("    filter: blur(0);\n", "", 1)
+          css.write_text(text, encoding="utf-8")
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Lint web application
+        run: |
+          npm ci --ignore-scripts
+          npm run lint
+
+      - name: Commit polish and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/one-shot-polish-transitions.yml
+          git config user.name "chatgpt-github-agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add components/editorial-panel.tsx app/globals.css .github/workflows/one-shot-polish-transitions.yml
+          git commit -m "Polish page transition animations"
+          git push origin HEAD:${GITHUB_REF_NAME}
