@@ -3,6 +3,22 @@
 This document describes the HTTP contract implemented by the current Core API and
 private Judge service.
 
+## Community OJ
+
+Public problem data never contains hidden tests or the standard solution.
+
+- `GET /v1/oj/tags` — fixed OI algorithm taxonomy.
+- `GET /v1/oj/problems?query=&difficulty=&tag=&page=` — published problem index; `query` accepts a public ID or title fragment.
+- `GET /v1/oj/problems/:publicId` — statement, limits, tags, author, statistics, and explicitly public samples.
+- `POST /v1/oj/problems` — verified users submit a problem, private tests, and a GNU++14 standard solution for review.
+- `PUT /v1/oj/drafts/:draftId` — the author updates and resubmits a pending or rejected draft.
+- `GET /v1/oj/mine` — the author sees review state, reviewer note, and the public ID after approval.
+- `POST /v1/oj/problems/:publicId/submissions` — submit GNU++14 source to the existing isolated Judge pipeline.
+- `GET /v1/admin/oj/problems?status=pending` — admin/owner moderation queue, including trusted tests and std.
+- `PATCH /v1/admin/oj/problems/:draftId` — publish (atomically assigning a numeric public ID) or reject with a reason.
+
+OJ submissions are polled through `GET /v1/judge/submissions/:submissionId` and remain owner-scoped. Public list/detail routes cannot read `tests` or `std_source`; only author and administrator routes receive them.
+
 ## Base URLs
 
 Normal browser deployment through Nginx:
@@ -188,6 +204,11 @@ Common status meanings:
 | `GET` | `/v1/admin/quests` | Admin | Load complete quest records including hidden Judge definitions |
 | `POST` | `/v1/admin/quests` | Admin | Create a custom quest |
 | `PUT` | `/v1/admin/quests/:questId` | Admin | Replace custom quest or override a built-in quest |
+| `GET` | `/v1/codex` | Public | List published database-backed Codex entries and overrides |
+| `GET` | `/v1/admin/codex` | Admin | List every managed Codex entry, including drafts |
+| `POST` | `/v1/admin/codex` | Admin | Create a Codex entry or built-in override |
+| `PUT` | `/v1/admin/codex/:entryId` | Admin | Update a managed Codex entry |
+| `DELETE` | `/v1/admin/codex/:entryId` | Admin | Delete a custom entry or restore a built-in default |
 | `DELETE` | `/v1/admin/quests/:questId` | Admin | Archive quest record |
 | `PUT` | `/v1/admin/quest-map-layout` | Admin | Persist quest coordinates |
 

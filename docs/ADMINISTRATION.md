@@ -3,7 +3,8 @@
 AlgoQuest has three account roles:
 
 - `player`: plays quests, keeps cloud/local saves, drafts and submissions.
-- `admin`: can inspect and update player profiles, and create, edit or archive quests.
+- `admin`: can inspect and update player profiles, create, edit or archive quests,
+  and manage the Algorithm Codex.
 - `owner`: has every admin permission plus server status and safe runtime controls.
 
 Role checks are enforced by the Core API. Hiding a button in the browser is not
@@ -34,7 +35,9 @@ Owners cannot be created, demoted or edited through ordinary admin endpoints.
 
 Built-in quests keep their hidden tests inside the Judge service. Admins can
 change their public title, story, guidance, limits, prerequisites and map
-position without exposing those tests.
+position without exposing those tests. The quest editor also exposes the
+player-facing `CODEX WHISPER`, its starter-code insertion marker, and the code
+snippet inserted when the player applies the hint.
 
 New custom quests require:
 
@@ -55,6 +58,18 @@ remain available for audit.
 Admins and owners can also use **Edit map** above the campaign map. Quest cards
 can be dragged without overlapping; **Save map** persists the layout in
 PostgreSQL for every player. **Cancel** discards the unsaved drag operation.
+
+## Algorithm Codex management
+
+Admins and owners can open **CODEX** in the main control deck. The editor
+supports localized titles, summaries, explanations and checkpoints, together
+with category, linked quest, complexity, tags and the C++14 reference code.
+
+Saving a built-in entry creates a database override while keeping the
+source-controlled default available. Deleting that override restores the
+default. New entries are database-backed and can remain unpublished until they
+are ready; published entries are merged into the main searchable Codex for all
+players.
 
 ## Owner server controls
 

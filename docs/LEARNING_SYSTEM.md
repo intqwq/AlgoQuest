@@ -138,7 +138,10 @@ Published custom entries are available through `GET /v1/codex`. Administrators u
 
 Localized text fields are objects with `en`, `zh-CN`, and `ja` keys. Each entry stores category, linked quest, marker, summary, explanation, checkpoints, complexity labels, tags, C++14 code, publish state, and sort order.
 
-Custom entries appear in the Learning OS `Codex+` reader. The existing built-in Codex remains source-controlled.
+Published entries appear in both the Learning OS `Codex+` reader and the main
+searchable Codex. The main control deck provides a structured localized editor.
+Using the ID of a built-in entry creates an editable database override; deleting
+that record restores the source-controlled default.
 
 ## Core API endpoints
 
@@ -202,4 +205,3 @@ The implementation adds:
 - `tests/learning-system.test.mjs` for the exposed Learning OS surfaces.
 
 The extension loader and exported pure functions were also executed directly under Node.js 22 during implementation, and the new TypeScript/TSX modules were statically checked with TypeScript 5.8.
-

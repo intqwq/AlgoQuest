@@ -1,12 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  CodexCategory,
   codexCategories,
   codexEntries,
   localizeCodex,
+  type CodexCategory,
+  type CodexEntry,
 } from "@/lib/codex";
+import {
+  loadPublishedCodexEntries,
+  type ManagedCodexEntry,
+} from "@/lib/api-client";
 import type { Locale } from "@/lib/i18n";
 import type { Quest } from "@/lib/quests";
 
@@ -93,6 +98,39 @@ export function CodexLibrary({
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<CategoryFilter>("all");
   const [selectedId, setSelectedId] = useState(codexEntries[0].id);
+  const [managedEntries, setManagedEntries] = useState<ManagedCodexEntry[]>([]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void loadPublishedCodexEntries()
+        .then(setManagedEntries)
+        .catch(() => setManagedEntries([]));
+    };
+    refresh();
+    window.addEventListener("algoquest:codex-updated", refresh);
+    return () => window.removeEventListener("algoquest:codex-updated", refresh);
+  }, []);
+
+  const entries = useMemo(() => {
+    const merged = new Map<string, CodexEntry>(
+      codexEntries.map((entry) => [entry.id, entry]),
+    );
+    for (const entry of managedEntries) merged.set(entry.id, entry);
+    const staticOrder = new Map(
+      codexEntries.map((entry, index) => [entry.id, (index + 1) * 100]),
+    );
+    return [...merged.values()].sort((left, right) => {
+      const leftOrder =
+        managedEntries.find((entry) => entry.id === left.id)?.sortOrder ??
+        staticOrder.get(left.id) ??
+        999_999;
+      const rightOrder =
+        managedEntries.find((entry) => entry.id === right.id)?.sortOrder ??
+        staticOrder.get(right.id) ??
+        999_999;
+      return leftOrder - rightOrder || left.id.localeCompare(right.id);
+    });
+  }, [managedEntries]);
 
   const questById = useMemo(
     () => new Map(questCatalog.map((quest) => [quest.id, quest])),
@@ -101,7 +139,7 @@ export function CodexLibrary({
 
   const filteredEntries = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
-    return codexEntries.filter((entry) => {
+    return entries.filter((entry) => {
       if (category !== "all" && entry.category !== category) return false;
       if (!normalized) return true;
       const quest = questById.get(entry.questId);
@@ -116,15 +154,17 @@ export function CodexLibrary({
         .toLocaleLowerCase();
       return searchable.includes(normalized);
     });
-  }, [category, locale, query, questById]);
+  }, [category, entries, locale, query, questById]);
 
   const selected =
     filteredEntries.find((entry) => entry.id === selectedId) ??
     filteredEntries[0];
-  const discoveredCount = codexEntries.filter((entry) =>
+  const discoveredCount = entries.filter((entry) =>
     cleared.has(entry.questId),
   ).length;
-  const progress = Math.round((discoveredCount / codexEntries.length) * 100);
+  const progress = entries.length
+    ? Math.round((discoveredCount / entries.length) * 100)
+    : 0;
   const relatedQuest = selected ? questById.get(selected.questId) : undefined;
 
   return (
@@ -144,7 +184,7 @@ export function CodexLibrary({
             <span style={{ width: `${progress}%` }} />
           </div>
           <small>
-            {discoveredCount} / {codexEntries.length} {copy.entries}
+            {discoveredCount} / {entries.length} {copy.entries}
           </small>
         </div>
       </div>
@@ -304,4 +344,3 @@ export function CodexLibrary({
     </section>
   );
 }
-
