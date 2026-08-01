@@ -89,3 +89,16 @@ jobs:
         run: |
           docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
           JUDGE_DOCKER_TEST=1 npm --prefix judge test
+
+      - name: Test the Compose Judge API, queue and worker path
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker compose --env-file .env.windows.example --profile judge down --remove-orphans
+          }
+          trap cleanup EXIT
+          docker compose --env-file .env.windows.example --profile judge up -d --build judge judge-worker redis
+          if ! docker compose --env-file .env.windows.example exec -T judge node scripts/smoke.mjs; then
+            docker compose --env-file .env.windows.example logs --tail 150 judge judge-worker redis
+            exit 1
+          fi

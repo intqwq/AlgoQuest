@@ -93,8 +93,8 @@ try {
             --env-file $EnvFile `
             exec -T judge node scripts/smoke.mjs
         if ($LASTEXITCODE -ne 0) {
-            & docker compose --env-file $EnvFile logs --tail 100 judge
-            throw "Judge smoke test failed. The deployment is running, but correct C++ was not accepted."
+            & docker compose --env-file $EnvFile logs --tail 100 judge judge-worker redis
+            throw "Judge smoke test failed. Inspect the Judge API, worker, and Redis logs above."
         }
     }
 
