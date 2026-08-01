@@ -23,7 +23,7 @@
     "@tiptap/extension-text-style": "3.29.2",
     "@tiptap/react": "3.29.2",
     "@tiptap/starter-kit": "3.29.2",
-    "katex": "0.17.0",
+    "katex": "0.18.1",
     "lowlight": "3.3.0",
     "monaco-editor": "0.56.0",
     "react": "19.2.6",
