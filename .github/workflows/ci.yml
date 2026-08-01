@@ -21,6 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Temporary bootstrap artifact for this refactor; removed before merge.
+      - name: Snapshot checked-out source
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: .
+          include-hidden-files: true
+          retention-days: 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
