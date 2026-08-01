@@ -1,0 +1,36 @@
+name: Apply codebase cleanup
+
+on:
+  push:
+    branches:
+      - agent/codebase-cleanup-20260802
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[cleanup-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/codebase-cleanup-20260802
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Validate and apply cleanup
+        run: |
+          node --check scripts/codebase-cleanup.mjs
+          node scripts/codebase-cleanup.mjs
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit transformed repository
+        run: |
+          rm -f scripts/codebase-cleanup.mjs .github/workflows/apply-codebase-cleanup.yml
+          git config user.name "AlgoQuest Cleanup Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Refactor runtime, OJ, profiles, and migrations [cleanup-applied]"
+          git push origin HEAD:agent/codebase-cleanup-20260802
