@@ -9,6 +9,12 @@ limit_req_zone $binary_remote_addr zone=algoquest_guest:10m rate=10r/m;
 server {
     listen 80;
     server_name _;
+    server_tokens off;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 
     # Docker's embedded DNS server tracks service IP changes after containers
     # are recreated. proxy_pass uses variables so Nginx resolves each hostname
@@ -17,7 +23,8 @@ server {
     set $api_upstream "${API_UPSTREAM}";
     set $web_upstream "${WEB_UPSTREAM}";
 
-    client_max_body_size 128k;
+    # Route handlers still enforce their own tighter limits.
+    client_max_body_size 1m;
     limit_req_status 429;
 
     location = /healthz {

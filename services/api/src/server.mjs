@@ -34,6 +34,7 @@ import {
   turnstileTestSecretKey,
   turnstileTestSiteKey,
 } from "./security.mjs";
+import { ensureQuestRuleAccess } from "./learning-extension.mjs";
 
 const port = Number(process.env.PORT ?? 8787);
 const databaseUrl =
@@ -1260,6 +1261,14 @@ const server = http.createServer(async (request, response) => {
     ) {
       requirePlayableAccount(player);
       const body = await readJson(request);
+      if (
+        validQuestId(body.questId) &&
+        !(await ensureQuestRuleAccess(player.id, body.questId))
+      ) {
+        throw new ApiError(403, "QUEST_UNLOCK_RULE_NOT_MET", {
+          questId: body.questId,
+        });
+      }
       const settings = await database.getServerSettings();
       if (!settings.judgeEnabled) {
         throw new ApiError(503, "JUDGE_DISABLED");
