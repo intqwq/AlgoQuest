@@ -30,7 +30,7 @@ export function createOjRepository(pool) {
       );
       return mapOjProblem(result.rows[0]);
     },
-    
+
     async updateOjProblemDraft(problemId, authorId, problem) {
       const pendingRevision = await pool.query(
         `UPDATE oj_problems
@@ -84,7 +84,7 @@ export function createOjRepository(pool) {
       );
       return result.rowCount ? mapOjProblem(result.rows[0]) : undefined;
     },
-    
+
     async listPublishedOjProblems({ query = "", difficulty, tag = "", limit = 30, offset = 0 } = {}) {
       const normalizedQuery = query.trim().slice(0, 160);
       const normalizedDifficulty = Number.isInteger(difficulty) ? difficulty : null;
@@ -94,11 +94,13 @@ export function createOjRepository(pool) {
            p.memory_limit_mb, p.difficulty, p.tags, p.created_at,
            p.published_at, p.updated_at,
            u.id AS author_id, u.display_name AS author_name,
+           CASE WHEN profile.is_public THEN profile.handle END AS author_handle,
            COUNT(s.id)::integer AS submission_count,
            COUNT(s.id) FILTER (WHERE s.verdict = 'AC')::integer AS accepted_count,
            COUNT(*) OVER()::integer AS total_count
          FROM oj_problems p
          JOIN users u ON u.id = p.author_id
+         LEFT JOIN player_profiles profile ON profile.user_id = u.id
          LEFT JOIN submissions s ON s.quest_id = 'oj-' || p.public_id::text
          WHERE p.status = 'published'
            AND (
@@ -108,7 +110,7 @@ export function createOjRepository(pool) {
            )
            AND ($2::smallint IS NULL OR p.difficulty = $2::smallint)
            AND ($3::text = '' OR $3::text = ANY(p.tags))
-         GROUP BY p.id, u.id
+         GROUP BY p.id, u.id, profile.handle, profile.is_public
          ORDER BY p.public_id DESC
          LIMIT $4::integer OFFSET $5::integer`,
         [
@@ -124,24 +126,26 @@ export function createOjRepository(pool) {
         total: result.rows[0]?.total_count ?? 0,
       };
     },
-    
+
     async getPublishedOjProblem(publicId) {
       const result = await pool.query(
         `SELECT
            p.*,
            u.id AS author_id, u.display_name AS author_name,
+           CASE WHEN profile.is_public THEN profile.handle END AS author_handle,
            COUNT(s.id)::integer AS submission_count,
            COUNT(s.id) FILTER (WHERE s.verdict = 'AC')::integer AS accepted_count
          FROM oj_problems p
          JOIN users u ON u.id = p.author_id
+         LEFT JOIN player_profiles profile ON profile.user_id = u.id
          LEFT JOIN submissions s ON s.quest_id = 'oj-' || p.public_id::text
          WHERE p.status = 'published' AND p.public_id = $1::bigint
-         GROUP BY p.id, u.id`,
+         GROUP BY p.id, u.id, profile.handle, profile.is_public`,
         [publicId],
       );
       return result.rowCount ? mapOjProblem(result.rows[0]) : undefined;
     },
-    
+
     async listAuthorOjProblems(authorId) {
       const result = await pool.query(
         `SELECT p.*, u.display_name AS author_name,
@@ -155,7 +159,7 @@ export function createOjRepository(pool) {
       );
       return result.rows.map(mapOjProblem);
     },
-    
+
     async listOjProblemsForModeration(status = "pending") {
       const result = await pool.query(
         `SELECT p.*, u.display_name AS author_name,
@@ -170,7 +174,7 @@ export function createOjRepository(pool) {
       );
       return result.rows.map(mapOjProblem);
     },
-    
+
     async moderateOjProblem(problemId, status, reviewerId, reviewNote) {
       const revision = await pool.query(
         `UPDATE oj_problems
@@ -273,11 +277,32 @@ export function createOjRepository(pool) {
     },
 
     async deleteOjProblem(problemId) {
-      const result = await pool.query(
-        "DELETE FROM oj_problems WHERE id = $1::uuid RETURNING id",
-        [problemId],
-      );
-      return result.rowCount > 0;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const target = await client.query(
+          "SELECT public_id FROM oj_problems WHERE id = $1::uuid FOR UPDATE",
+          [problemId],
+        );
+        if (!target.rowCount) {
+          await client.query("ROLLBACK");
+          return false;
+        }
+        if (target.rows[0].public_id !== null) {
+          await client.query(
+            "DELETE FROM editorial_posts WHERE scope = 'oj' AND quest_id = $1::text",
+            [String(target.rows[0].public_id)],
+          );
+        }
+        await client.query("DELETE FROM oj_problems WHERE id = $1::uuid", [problemId]);
+        await client.query("COMMIT");
+        return true;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
   };
 }
@@ -305,6 +330,7 @@ function mapOjProblem(row) {
     author: {
       id: row.author_id,
       displayName: row.author_name ?? "PLAYER",
+      handle: row.author_handle ?? null,
     },
     submissionCount: row.submission_count ?? 0,
     acceptedCount: row.accepted_count ?? 0,

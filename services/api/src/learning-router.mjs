@@ -812,6 +812,44 @@ async function profileStatistics(userId) {
   };
 }
 
+async function profileContributions(userId) {
+  const [problems, posts] = await Promise.all([
+    pool.query(
+      `SELECT public_id, title, difficulty, tags, published_at
+         FROM oj_problems
+        WHERE author_id = $1 AND status = 'published'
+        ORDER BY published_at DESC
+        LIMIT 24`,
+      [userId],
+    ),
+    pool.query(
+      `SELECT id, scope, quest_id, kind, title, created_at
+         FROM editorial_posts
+        WHERE author_id = $1 AND status = 'published'
+        ORDER BY created_at DESC
+        LIMIT 40`,
+      [userId],
+    ),
+  ]);
+  return {
+    problems: problems.rows.map((row) => ({
+      publicId: Number(row.public_id),
+      title: row.title,
+      difficulty: row.difficulty,
+      tags: row.tags ?? [],
+      publishedAt: asIso(row.published_at),
+    })),
+    posts: posts.rows.map((row) => ({
+      id: row.id,
+      scope: row.scope ?? "quest",
+      targetId: row.quest_id,
+      kind: row.kind,
+      title: row.title,
+      createdAt: asIso(row.created_at),
+    })),
+  };
+}
+
 function submissionRow(row, includeSource = false) {
   const item = {
     id: row.id,
@@ -1353,6 +1391,10 @@ async function handleExtensionRoute(request, response) {
     );
     if (!profile.rowCount) throw new ExtensionError(404, "PUBLIC_PROFILE_NOT_FOUND");
     const row = profile.rows[0];
+    const [statistics, contributions] = await Promise.all([
+      profileStatistics(row.user_id),
+      profileContributions(row.user_id),
+    ]);
     sendJson(response, 200, {
       profile: {
         handle: row.handle,
@@ -1361,7 +1403,8 @@ async function handleExtensionRoute(request, response) {
         showCode: row.show_code,
         joinedAt: asIso(row.created_at),
       },
-      statistics: await profileStatistics(row.user_id),
+      statistics,
+      contributions,
     });
     return true;
   }
@@ -1451,10 +1494,12 @@ async function handleExtensionRoute(request, response) {
   }
 
   if (request.method === "GET" && url.pathname === "/v1/me/public-profile") {
-    sendJson(response, 200, {
-      profile: await ensureProfile(player),
-      statistics: await profileStatistics(player.id),
-    });
+    const [profile, statistics, contributions] = await Promise.all([
+      ensureProfile(player),
+      profileStatistics(player.id),
+      profileContributions(player.id),
+    ]);
+    sendJson(response, 200, { profile, statistics, contributions });
     return true;
   }
 

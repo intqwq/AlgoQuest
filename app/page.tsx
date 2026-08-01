@@ -5,7 +5,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
 import { AdminConsole } from "@/components/admin-console";
 import { CodexLibrary } from "@/components/codex-library";
+import { CommunityHub } from "@/components/community-hub";
 import { OjHub } from "@/components/oj-hub";
+import { ProfileHub } from "@/components/profile-hub";
 import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
@@ -148,7 +150,7 @@ export default function Home() {
   const [locale, setLocale] = useState<Locale>("en");
   const [notice, setNotice] = useState("ACCOUNT REQUIRED // WELCOME MODE");
   const [screen, setScreen] = useState<"world" | "mission">("world");
-  const [portal, setPortal] = useState<"learn" | "oj">("learn");
+  const [portal, setPortal] = useState<"learn" | "oj" | "community" | "profile">("learn");
   const [cleared, setCleared] = useState<Set<string>>(new Set());
   const [player, setPlayer] = useState<Player>();
   const [playerSave, setPlayerSave] = useState<PlayerSave>();
@@ -189,6 +191,19 @@ export default function Home() {
       : locale === "ja"
         ? "管理コンソール"
         : "CONTROL DECK";
+  const communityLabel = locale === "zh-CN" ? "社区" : locale === "ja" ? "コミュニティ" : "COMMUNITY";
+  const profileLabel = locale === "zh-CN" ? "个人页面" : locale === "ja" ? "個人ページ" : "PROFILE";
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const requested = new URLSearchParams(window.location.search).get("portal");
+      if (requested === "oj" || requested === "community" || requested === "profile") {
+        setPortal(requested);
+        setScreen("world");
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const refreshQuestCatalog = useCallback(() => {
     void loadQuestCatalog().then(
@@ -585,6 +600,20 @@ export default function Home() {
           >
             [ OJ ]
           </button>
+          <button
+            type="button"
+            className={portal === "community" ? "active" : ""}
+            onClick={() => { setPortal("community"); setScreen("world"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          >
+            [ {communityLabel} ]
+          </button>
+          <button
+            type="button"
+            className={portal === "profile" ? "active" : ""}
+            onClick={() => { setPortal("profile"); setScreen("world"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          >
+            [ {profileLabel} ]
+          </button>
           {canManage && (
             <button
               type="button"
@@ -698,6 +727,16 @@ export default function Home() {
             <span>OJ // COMMUNITY PROBLEM ARCHIVE</span>
             <a href="#oj-top">[ {copy.backToTop} ]</a>
           </footer>
+        </>
+      ) : portal === "community" ? (
+        <>
+          <CommunityHub player={player} locale={locale} onLogin={() => openAccount("login")} />
+          <footer><span>© 2026 ALGOQUEST PROJECT</span><span>COMMUNITY // PLAYER NETWORK</span><a href="#community-top">[ {copy.backToTop} ]</a></footer>
+        </>
+      ) : portal === "profile" ? (
+        <>
+          <ProfileHub player={player} locale={locale} onLogin={() => openAccount("login")} />
+          <footer><span>© 2026 ALGOQUEST PROJECT</span><span>PLAYER // PERSONAL DATABASE</span><a href="#profile-top">[ {copy.backToTop} ]</a></footer>
         </>
       ) : screen === "mission" && canPlay && playerSave ? (
         <MissionTerminal

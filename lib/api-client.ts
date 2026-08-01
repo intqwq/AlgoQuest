@@ -74,6 +74,8 @@ export type EditorialContentFormat = "plain" | "tiptap-json-v1";
 export type EditorialPost = {
   id: string;
   questId: string;
+  scope: "quest" | "oj" | "community";
+  targetId: string;
   kind: EditorialKind;
   title: string;
   content: string;
@@ -83,6 +85,7 @@ export type EditorialPost = {
     id: string;
     displayName: string;
     role: Player["role"];
+    handle: string | null;
   };
   createdAt: string;
   updatedAt: string;
@@ -117,7 +120,7 @@ export type OjProblemSummary = {
   memoryLimitMb: number;
   difficulty: number;
   tags: string[];
-  author: { id: string; displayName: string };
+  author: { id: string; displayName: string; handle: string | null };
   submissionCount: number;
   acceptedCount: number;
   createdAt: string;
@@ -144,7 +147,7 @@ export type OjProblemDraft = {
   tests: OjTestCase[];
   stdSource: string;
   reviewNote: string;
-  author: { id: string; displayName: string };
+  author: { id: string; displayName: string; handle?: string | null };
   createdAt: string;
   updatedAt: string;
   reviewedAt: string | null;
@@ -161,6 +164,61 @@ export type OjProblemInput = {
   tags: string[];
   tests: OjTestCase[];
   stdSource: string;
+};
+
+export type CommunityCategory = {
+  id: string;
+  label: { en: string; "zh-CN": string; ja: string };
+};
+
+export type CommunityUser = {
+  handle: string;
+  displayName: string;
+  bio: string;
+  joinedAt: string;
+  ojProblemCount: number;
+  solutionCount: number;
+  discussionCount: number;
+};
+
+export type ProfileContributions = {
+  problems: Array<{
+    publicId: number;
+    title: string;
+    difficulty: number;
+    tags: string[];
+    publishedAt: string;
+  }>;
+  posts: Array<{
+    id: string;
+    scope: "quest" | "oj" | "community";
+    targetId: string;
+    kind: EditorialKind;
+    title: string;
+    createdAt: string;
+  }>;
+};
+
+export type PublicPlayerData = {
+  profile: {
+    handle: string;
+    displayName: string;
+    bio: string;
+    showCode: boolean;
+    joinedAt: string;
+  };
+  statistics: {
+    clearedCount: number;
+    submissionCount: number;
+    acceptedCount: number;
+    acceptanceRate: number;
+    currentStreak: number;
+    longestStreak: number;
+    totalXp: number;
+    achievements: Array<{ id: string; icon: string; title: string; description: string; unlockedAt: string }>;
+    recentClears: Array<{ questId: string; bestScore: number; clearedAt: string }>;
+  };
+  contributions: ProfileContributions;
 };
 
 export type JudgeSubmissionState = {
@@ -367,6 +425,16 @@ export async function authenticatedFetch(
     new CustomEvent("algoquest:session", { detail: undefined }),
   );
   return response;
+}
+
+async function optionalSessionFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+) {
+  const headers = new Headers(init.headers);
+  const token = window.localStorage.getItem(sessionStorageKey);
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  return retryingFetch(input, { ...init, headers });
 }
 
 async function parseAuthResponse(response: Response) {
@@ -612,6 +680,127 @@ export async function createEditorialPost(
     },
   );
   return body.post;
+}
+
+export async function loadOjEditorial(publicId: number) {
+  const response = await optionalSessionFetch(
+    apiUrl(`/oj/problems/${publicId}/editorial`),
+    { headers: { accept: "application/json" } },
+  );
+  const body = (await response.json().catch(() => ({}))) as {
+    posts?: EditorialPost[];
+    eligibility?: EditorialEligibility;
+    error?: string;
+  };
+  if (!response.ok || !body.posts || !body.eligibility) {
+    throw new AuthApiError(body.error ?? "OJ_EDITORIAL_UNAVAILABLE", response.status);
+  }
+  return { posts: body.posts, eligibility: body.eligibility };
+}
+
+export async function createOjEditorialPost(
+  publicId: number,
+  input: {
+    kind: EditorialKind;
+    title: string;
+    content: string;
+    contentFormat: EditorialContentFormat;
+  },
+) {
+  const body = await adminJson<{ post: EditorialPost }>(
+    `/oj/problems/${publicId}/editorial`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.post;
+}
+
+export async function loadCommunityPosts(filters: {
+  query?: string;
+  category?: string;
+  page?: number;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  if (filters.query) params.set("query", filters.query);
+  if (filters.category) params.set("category", filters.category);
+  params.set("page", String(filters.page ?? 1));
+  params.set("limit", String(filters.limit ?? 20));
+  const response = await optionalSessionFetch(apiUrl(`/community/posts?${params}`), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new AuthApiError("COMMUNITY_UNAVAILABLE", response.status);
+  return response.json() as Promise<{
+    posts: EditorialPost[];
+    total: number;
+    page: number;
+    limit: number;
+    categories: CommunityCategory[];
+  }>;
+}
+
+export async function createCommunityPost(input: {
+  category: string;
+  title: string;
+  content: string;
+  contentFormat: EditorialContentFormat;
+}) {
+  const body = await adminJson<{ post: EditorialPost }>("/community/posts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return body.post;
+}
+
+export async function searchCommunityUsers(query = "", page = 1) {
+  const params = new URLSearchParams({ query, page: String(page), limit: "24" });
+  const response = await retryingFetch(apiUrl(`/community/users?${params}`), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new AuthApiError("COMMUNITY_USERS_UNAVAILABLE", response.status);
+  return response.json() as Promise<{
+    users: CommunityUser[];
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+}
+
+export async function loadPublicPlayer(handle: string) {
+  const response = await retryingFetch(apiUrl(`/players/${encodeURIComponent(handle)}`), {
+    headers: { accept: "application/json" },
+  });
+  const body = (await response.json().catch(() => ({}))) as PublicPlayerData & { error?: string };
+  if (!response.ok) throw new AuthApiError(body.error ?? "PUBLIC_PROFILE_NOT_FOUND", response.status);
+  return body;
+}
+
+export async function loadMyPublicProfile() {
+  return adminJson<{
+    profile: { handle: string; bio: string; isPublic: boolean; showCode: boolean; createdAt: string; updatedAt: string };
+    statistics: PublicPlayerData["statistics"];
+    contributions: ProfileContributions;
+  }>("/me/public-profile", { headers: { accept: "application/json" } });
+}
+
+export async function updateMyPublicProfile(input: {
+  handle: string;
+  bio: string;
+  isPublic: boolean;
+  showCode: boolean;
+}) {
+  return adminJson<{ profile: { handle: string; bio: string; isPublic: boolean; showCode: boolean; createdAt: string; updatedAt: string } }>(
+    "/me/public-profile",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function loadEditorialModeration(status: EditorialStatus = "pending") {
