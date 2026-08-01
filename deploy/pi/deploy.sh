@@ -81,8 +81,8 @@ if [[ "${mode}" == "all" || "${mode}" == "judge" ]]; then
   if ! docker compose \
     --env-file "${env_file}" \
     exec -T judge node scripts/smoke.mjs; then
-    docker compose --env-file "${env_file}" logs --tail 100 judge
-    echo "Judge smoke test failed. Correct C++ was not accepted." >&2
+    docker compose --env-file "${env_file}" logs --tail 100 judge judge-worker redis
+    echo "Judge smoke test failed. Inspect the Judge API, worker, and Redis logs above." >&2
     exit 1
   fi
 fi
