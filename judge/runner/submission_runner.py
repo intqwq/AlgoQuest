@@ -13,16 +13,39 @@ from pathlib import Path
 
 
 SUBMISSION_ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else "/submission")
-MANIFEST_PATH = SUBMISSION_ROOT / "manifest.json"
 SOURCE_PATH = SUBMISSION_ROOT / "main.cpp"
 BINARY_PATH = SUBMISSION_ROOT / "main"
 RUNNER_UID = 10001
 RUNNER_GID = 10001
 MAX_OUTPUT_BYTES = 64 * 1024
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 WORK_ROOT = Path(os.environ.get("ALGOQUEST_RUNNER_WORK_ROOT", "/work"))
 COMPILE_ROOT = WORK_ROOT / "compile"
 COMPILED_BINARY_PATH = COMPILE_ROOT / "main"
 MEMORY_BASELINE_PATH = Path("/opt/algoquest/memory_baseline")
+
+
+
+def read_manifest():
+    # The trusted test manifest is delivered through the container supervisor's
+    # stdin. Read it once as root, close fd 0 before any contestant process is
+    # spawned, and keep the hidden tests only in supervisor memory.
+    payload = sys.stdin.buffer.read(MAX_MANIFEST_BYTES + 1)
+    sys.stdin.close()
+    # Keep fd 0 occupied by /dev/null. Otherwise a later subprocess pipe may
+    # reuse it and expose hidden case input through /proc/1/fd/0.
+    devnull_fd = os.open(os.devnull, os.O_RDONLY)
+    if devnull_fd != 0:
+        os.dup2(devnull_fd, 0)
+        os.close(devnull_fd)
+    if not payload:
+        raise ValueError("Judge manifest is empty")
+    if len(payload) > MAX_MANIFEST_BYTES:
+        raise ValueError("Judge manifest exceeds its safety limit")
+    manifest = json.loads(payload.decode("utf-8"))
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
+        raise ValueError("Judge manifest is invalid")
+    return manifest
 
 
 def emit(payload):
@@ -75,8 +98,8 @@ def child_limits(memory_bytes=None, time_limit_ms=None, output_limit=False):
 def compile_source(manifest):
     emit({"type": "phase", "phase": "COMPILING", "cacheHit": bool(manifest["cacheHit"])})
     if manifest["cacheHit"] and BINARY_PATH.exists():
-        os.chmod(BINARY_PATH, 0o555)
-        os.chmod(SUBMISSION_ROOT, 0o755)
+        # Cached binaries are prepared by the host before the container starts.
+        # Never mutate the read-only contestant mount.
         return None
 
     COMPILE_ROOT.mkdir(mode=0o777)
@@ -127,12 +150,8 @@ def compile_source(manifest):
             "compiled": False,
         }
 
-    # The compiler runs as the unprivileged submission user. Copying the
-    # finished executable from the scratch tmpfs creates a root-owned file
-    # without granting CAP_CHOWN to the container supervisor.
-    shutil.copyfile(COMPILED_BINARY_PATH, BINARY_PATH)
-    os.chmod(BINARY_PATH, 0o555)
-    os.chmod(SUBMISSION_ROOT, 0o755)
+    # Keep fresh binaries in the isolated /work tmpfs. The host exports an
+    # optional cache candidate only after the container has stopped.
     return None
 
 
@@ -193,7 +212,7 @@ def run_case(test, manifest, memory_baseline_kb):
         "%e %M",
         "-o",
         str(metrics_path),
-        str(BINARY_PATH),
+        str(BINARY_PATH if manifest["cacheHit"] else COMPILED_BINARY_PATH),
     ]
     memory_bytes = int(manifest["memoryLimitMb"]) * 1024 * 1024
     started = time.monotonic()
@@ -270,10 +289,10 @@ def run_case(test, manifest, memory_baseline_kb):
 
 def main():
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
-    manifest = json.loads(MANIFEST_PATH.read_text())
+    manifest = read_manifest()
     compile_failure = compile_source(manifest)
     if compile_failure is not None:
-        emit({"type": "result", **compile_failure})
+        emit({"type": "result", **compile_failure, "containerStarts": 1})
         return
 
     emit(
