@@ -1,0 +1,211 @@
+      release: await rollbackQuest(
+        player,
+        rollbackMatch[1],
+        Number(rollbackMatch[2]),
+        body.note,
+      ),
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/admin/unlock-rules") {
+    sendJson(response, 200, { rules: await loadUnlockRules() });
+    return true;
+  }
+
+  const ruleMatch = url.pathname.match(
+    /^\/v1\/admin\/unlock-rules\/([a-z0-9-]{1,96})$/,
+  );
+  if (request.method === "PUT" && ruleMatch) {
+    const body = await readJson(request, 32 * 1024);
+    const rule = normalizeRule(body.rule);
+    const result = await pool.query(
+      `INSERT INTO quest_unlock_rules(quest_id, enabled, label, rule, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, now())
+       ON CONFLICT (quest_id) DO UPDATE SET
+         enabled = EXCLUDED.enabled,
+         label = EXCLUDED.label,
+         rule = EXCLUDED.rule,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = now()
+       RETURNING *`,
+      [
+        ruleMatch[1],
+        body.enabled !== false,
+        boundedText(body.label, 160, ruleMatch[1]),
+        JSON.stringify(rule),
+        player.id,
+      ],
+    );
+    const row = result.rows[0];
+    sendJson(response, 200, {
+      rule: {
+        questId: row.quest_id,
+        enabled: row.enabled,
+        label: row.label,
+        rule: row.rule,
+        updatedAt: asIso(row.updated_at),
+      },
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/admin/codex") {
+    const result = await pool.query(`SELECT * FROM codex_entries ORDER BY sort_order, id`);
+    sendJson(response, 200, { entries: result.rows.map(codexRow) });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/admin/codex") {
+    const input = validateCodex(await readJson(request));
+    try {
+      const result = await pool.query(
+        `INSERT INTO codex_entries
+           (id, category, quest_id, marker, title, summary, explanation, checkpoints,
+            time_complexity, space_complexity, tags, code, published, sort_order,
+            created_by, updated_by, created_at, updated_at)
+         VALUES
+           ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb,
+            $9, $10, $11::jsonb, $12, $13, $14, $15, $15, now(), now())
+         RETURNING *`,
+        [
+          input.id,
+          input.category,
+          input.questId,
+          input.marker,
+          JSON.stringify(input.title),
+          JSON.stringify(input.summary),
+          JSON.stringify(input.explanation),
+          JSON.stringify(input.checkpoints),
+          input.timeComplexity,
+          input.spaceComplexity,
+          JSON.stringify(input.tags),
+          input.code,
+          input.published,
+          input.sortOrder,
+          player.id,
+        ],
+      );
+      sendJson(response, 201, { entry: codexRow(result.rows[0]) });
+    } catch (error) {
+      if (error.code === "23505") throw new ExtensionError(409, "CODEX_ENTRY_EXISTS");
+      throw error;
+    }
+    return true;
+  }
+
+  const codexMatch = url.pathname.match(/^\/v1\/admin\/codex\/([a-z0-9-]{1,64})$/);
+  if (codexMatch && request.method === "PUT") {
+    const input = validateCodex(await readJson(request), codexMatch[1]);
+    const result = await pool.query(
+      `UPDATE codex_entries
+          SET category = $2, quest_id = $3, marker = $4, title = $5::jsonb,
+              summary = $6::jsonb, explanation = $7::jsonb,
+              checkpoints = $8::jsonb, time_complexity = $9,
+              space_complexity = $10, tags = $11::jsonb, code = $12,
+              published = $13, sort_order = $14, updated_by = $15, updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [
+        input.id,
+        input.category,
+        input.questId,
+        input.marker,
+        JSON.stringify(input.title),
+        JSON.stringify(input.summary),
+        JSON.stringify(input.explanation),
+        JSON.stringify(input.checkpoints),
+        input.timeComplexity,
+        input.spaceComplexity,
+        JSON.stringify(input.tags),
+        input.code,
+        input.published,
+        input.sortOrder,
+        player.id,
+      ],
+    );
+    if (!result.rowCount) throw new ExtensionError(404, "CODEX_ENTRY_NOT_FOUND");
+    sendJson(response, 200, { entry: codexRow(result.rows[0]) });
+    return true;
+  }
+  if (codexMatch && request.method === "DELETE") {
+    const result = await pool.query(`DELETE FROM codex_entries WHERE id = $1 RETURNING id`, [codexMatch[1]]);
+    if (!result.rowCount) throw new ExtensionError(404, "CODEX_ENTRY_NOT_FOUND");
+    sendJson(response, 204, {});
+    return true;
+  }
+
+  return false;
+}
+
+async function replayJudgeSubmission(request, response, listener) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 70 * 1024) throw new ExtensionError(413, "PAYLOAD_TOO_LARGE");
+    chunks.push(chunk);
+  }
+  const raw = Buffer.concat(chunks);
+  let body;
+  try {
+    body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+  } catch {
+    throw new ExtensionError(400, "INVALID_JSON");
+  }
+  const player = await authenticate(request);
+  requirePlayer(player);
+  if (validSlug(body.questId) && !(await ensureQuestRuleAccess(player.id, body.questId))) {
+    throw new ExtensionError(403, "QUEST_UNLOCK_RULE_NOT_MET", {
+      questId: body.questId,
+    });
+  }
+
+  const { Readable } = await import("node:stream");
+  const replay = Readable.from(raw.length ? [raw] : []);
+  replay.method = request.method;
+  replay.url = request.url;
+  replay.headers = request.headers;
+  replay.rawHeaders = request.rawHeaders;
+  replay.httpVersion = request.httpVersion;
+  replay.socket = request.socket;
+  replay.connection = request.connection;
+  listener(replay, response);
+}
+
+function handleExtensionFailure(response, error) {
+  if (response.writableEnded) return;
+  if (error instanceof ExtensionError) {
+    sendJson(response, error.status, { error: error.code, ...error.details });
+    return;
+  }
+  console.error("Learning extension request failed:", error);
+  sendJson(response, 500, { error: "LEARNING_EXTENSION_FAILURE" });
+}
+
+if (!globalThis.__algoquestLearningExtensionPatched) {
+  globalThis.__algoquestLearningExtensionPatched = true;
+  const originalCreateServer = http.createServer;
+  http.createServer = function patchedCreateServer(...args) {
+    const listenerIndex = args.findIndex((value) => typeof value === "function");
+    if (listenerIndex >= 0) {
+      const listener = args[listenerIndex];
+      args[listenerIndex] = (request, response) => {
+        const url = new URL(request.url ?? "/", "http://api.local");
+        if (request.method === "POST" && url.pathname === "/v1/judge/submissions") {
+          void replayJudgeSubmission(request, response, listener).catch((error) =>
+            handleExtensionFailure(response, error),
+          );
+          return;
+        }
+        Promise.resolve(handleExtensionRoute(request, response))
+          .then((handled) => {
+            if (!handled && !response.writableEnded) listener(request, response);
+          })
+          .catch((error) => handleExtensionFailure(response, error));
+      };
+    }
+    return originalCreateServer.apply(this, args);
+  };
+}
+
