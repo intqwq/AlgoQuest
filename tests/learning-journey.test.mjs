@@ -37,7 +37,16 @@ test("the first mission tutorial is mandatory while every quest story is skippab
   assert.match(page, /completeWebTutorial/);
   assert.match(page, /completeQuestStory/);
   assert.match(css, /\.prologue-overlay/);
-  assert.match(css, /@keyframes story-pulse/);
+  assert.doesNotMatch(prologue, /story-stage/);
+  assert.doesNotMatch(css, /@keyframes story-pulse/);
+});
+
+test("quest administration exposes the CODEX WHISPER hint fields", async () => {
+  const admin = await read("components/admin-console.tsx");
+  assert.match(admin, /CODEX WHISPER \(HINT\)/);
+  assert.match(admin, /HINT INSERT MARKER/);
+  assert.match(admin, /HINT CODE/);
+  assert.match(admin, /hint: event\.target\.value/);
 });
 
 test("the campaign reaches advanced algorithms with localized lessons and trusted tests", async () => {

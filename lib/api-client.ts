@@ -1,4 +1,5 @@
 import type { Quest } from "@/lib/quests";
+import type { CodexEntry } from "@/lib/codex";
 
 export type Player = {
   id: string;
@@ -59,6 +60,13 @@ export type AdminQuestRecord = {
   updatedAt: string;
 };
 
+export type ManagedCodexEntry = CodexEntry & {
+  published: boolean;
+  sortOrder: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type EditorialKind = "discussion" | "solution";
 export type EditorialStatus = "pending" | "published" | "rejected";
 export type EditorialContentFormat = "plain" | "tiptap-json-v1";
@@ -85,6 +93,77 @@ export type EditorialEligibility = {
   discussion: boolean;
   solution: boolean;
   directPublish: boolean;
+};
+
+export type OjProblemStatus = "pending" | "published" | "rejected";
+
+export type OjTestCase = {
+  id?: string;
+  input: string;
+  expected: string;
+  sample: boolean;
+};
+
+export type OjProblemSummary = {
+  publicId: number;
+  title: string;
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  difficulty: number;
+  tags: string[];
+  author: { id: string; displayName: string };
+  submissionCount: number;
+  acceptedCount: number;
+  createdAt: string;
+  publishedAt: string | null;
+};
+
+export type OjProblem = OjProblemSummary & {
+  statement: string;
+  samples: Array<{ input: string; output: string }>;
+};
+
+export type OjProblemDraft = {
+  id: string;
+  publicId: number | null;
+  status: OjProblemStatus;
+  title: string;
+  statement: string;
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  difficulty: number;
+  tags: string[];
+  tests: OjTestCase[];
+  stdSource: string;
+  reviewNote: string;
+  author: { id: string; displayName: string };
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt: string | null;
+  publishedAt: string | null;
+};
+
+export type OjProblemInput = {
+  title: string;
+  statement: string;
+  timeLimitMs: number;
+  memoryLimitMb: number;
+  difficulty: number;
+  tags: string[];
+  tests: OjTestCase[];
+  stdSource: string;
+};
+
+export type JudgeSubmissionState = {
+  id: string;
+  status: "QUEUED" | "COMPILING" | "RUNNING" | "DONE" | "ERROR";
+  queuePosition?: number;
+  pollAfterMs?: number;
+  verdict?: "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
+  score?: number;
+  compilerOutput?: string;
+  error?: string;
+  cases: Array<{ id: string; verdict: string; timeMs?: number; memoryKb?: number }>;
 };
 
 export type ServerOverview = {
@@ -359,6 +438,15 @@ export async function loadQuestCatalog(): Promise<{
   };
 }
 
+export async function loadPublishedCodexEntries() {
+  const response = await retryingFetch(apiUrl("/codex"), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) return [];
+  const body = (await response.json()) as { entries?: ManagedCodexEntry[] };
+  return Array.isArray(body.entries) ? body.entries : [];
+}
+
 async function adminJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await authenticatedFetch(apiUrl(path), init);
   const body = (await response.json().catch(() => ({}))) as {
@@ -402,6 +490,38 @@ export async function loadAdminQuests() {
     headers: { accept: "application/json" },
   });
   return body.quests;
+}
+
+export async function loadAdminCodexEntries() {
+  const body = await adminJson<{ entries: ManagedCodexEntry[] }>(
+    "/admin/codex",
+    { headers: { accept: "application/json" } },
+  );
+  return body.entries;
+}
+
+export async function saveAdminCodexEntry(
+  entry: ManagedCodexEntry,
+  create: boolean,
+) {
+  const body = await adminJson<{ entry: ManagedCodexEntry }>(
+    create
+      ? "/admin/codex"
+      : `/admin/codex/${encodeURIComponent(entry.id)}`,
+    {
+      method: create ? "POST" : "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(entry),
+    },
+  );
+  return body.entry;
+}
+
+export async function deleteAdminCodexEntry(entryId: string) {
+  await adminJson<Record<string, never>>(
+    `/admin/codex/${encodeURIComponent(entryId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function saveAdminQuest(
@@ -495,6 +615,126 @@ export async function moderateEditorialPost(
     },
   );
   return body.post;
+}
+
+export async function loadOjTags() {
+  const response = await retryingFetch(apiUrl("/oj/tags"), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new AuthApiError("OJ_TAGS_UNAVAILABLE", response.status);
+  const body = (await response.json()) as { tags?: string[] };
+  return Array.isArray(body.tags) ? body.tags : [];
+}
+
+export async function loadOjProblems(filters: {
+  query?: string;
+  difficulty?: number;
+  tag?: string;
+  page?: number;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  if (filters.query) params.set("query", filters.query);
+  if (filters.difficulty) params.set("difficulty", String(filters.difficulty));
+  if (filters.tag) params.set("tag", filters.tag);
+  params.set("page", String(filters.page ?? 1));
+  params.set("limit", String(filters.limit ?? 30));
+  const response = await retryingFetch(apiUrl(`/oj/problems?${params}`), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new AuthApiError("OJ_INDEX_UNAVAILABLE", response.status);
+  return response.json() as Promise<{
+    problems: OjProblemSummary[];
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+}
+
+export async function loadOjProblem(publicId: number) {
+  const response = await retryingFetch(apiUrl(`/oj/problems/${publicId}`), {
+    headers: { accept: "application/json" },
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    problem?: OjProblem;
+    error?: string;
+  };
+  if (!response.ok || !body.problem) {
+    throw new AuthApiError(body.error ?? "OJ_PROBLEM_UNAVAILABLE", response.status);
+  }
+  return body.problem;
+}
+
+export async function submitOjProblem(input: OjProblemInput) {
+  const body = await adminJson<{ problem: OjProblemDraft }>("/oj/problems", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return body.problem;
+}
+
+export async function resubmitOjProblem(problemId: string, input: OjProblemInput) {
+  const body = await adminJson<{ problem: OjProblemDraft }>(
+    `/oj/drafts/${encodeURIComponent(problemId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.problem;
+}
+
+export async function loadMyOjProblems() {
+  const body = await adminJson<{ problems: OjProblemDraft[] }>("/oj/mine", {
+    headers: { accept: "application/json" },
+  });
+  return body.problems;
+}
+
+export async function loadOjModeration(status: OjProblemStatus = "pending") {
+  const body = await adminJson<{ problems: OjProblemDraft[] }>(
+    `/admin/oj/problems?status=${encodeURIComponent(status)}`,
+    { headers: { accept: "application/json" } },
+  );
+  return body.problems;
+}
+
+export async function moderateOjProblem(
+  problemId: string,
+  status: Extract<OjProblemStatus, "published" | "rejected">,
+  reviewNote: string,
+) {
+  const body = await adminJson<{ problem: OjProblemDraft }>(
+    `/admin/oj/problems/${encodeURIComponent(problemId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status, reviewNote }),
+    },
+  );
+  return body.problem;
+}
+
+export async function submitOjSolution(publicId: number, source: string) {
+  const body = await adminJson<{ submission: JudgeSubmissionState }>(
+    `/oj/problems/${publicId}/submissions`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source }),
+    },
+  );
+  return body.submission;
+}
+
+export async function loadJudgeSubmission(submissionId: string) {
+  const body = await adminJson<{ submission: JudgeSubmissionState }>(
+    `/judge/submissions/${encodeURIComponent(submissionId)}`,
+    { headers: { accept: "application/json" } },
+  );
+  return body.submission;
 }
 
 export async function loadServerOverview() {

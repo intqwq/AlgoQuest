@@ -5,30 +5,41 @@ import { EditorialRichText } from "@/components/editorial-rich-text";
 import {
   AdminQuestRecord,
   archiveAdminQuest,
+  deleteAdminCodexEntry,
   EditorialPost,
   JudgeQuestDefinition,
+  loadAdminCodexEntries,
   loadEditorialModeration,
   loadAdminQuests,
   loadManagedPlayers,
   loadServerOverview,
   ManagedPlayer,
+  ManagedCodexEntry,
   moderateEditorialPost,
   Player,
   saveAdminQuest,
+  saveAdminCodexEntry,
   ServerOverview,
   updateManagedPlayer,
   updateServerSettings,
 } from "@/lib/api-client";
+import {
+  codexCategories,
+  codexEntries,
+  type CodexCategory,
+  type CodexEntry,
+} from "@/lib/codex";
 import type { Locale } from "@/lib/i18n";
 import type { Quest } from "@/lib/quests";
 
-type Tab = "players" | "quests" | "editorial" | "server";
+type Tab = "players" | "quests" | "codex" | "editorial" | "server";
 
 const copies = {
   en: {
     title: "CONTROL DECK",
     players: "PLAYERS",
     quests: "QUESTS",
+    codex: "CODEX",
     server: "SERVER",
     editorial: "MODERATION",
     search: "Search name or email",
@@ -39,6 +50,11 @@ const copies = {
     cleared: "CLEARED",
     newQuest: "ADD QUEST",
     editQuest: "EDIT QUEST",
+    newCodex: "ADD CODEX ENTRY",
+    editCodex: "EDIT CODEX ENTRY",
+    codexFields: "ALGORITHM CODEX KNOWLEDGE",
+    codexDelete: "DELETE OVERRIDE",
+    codexDeleteHint: "Deleting an override restores the built-in entry. Custom entries are removed.",
     archive: "ARCHIVE QUEST",
     restoreHint: "Archived quests stay in the database and disappear from the player map.",
     publicFields: "PUBLIC QUEST INFORMATION",
@@ -59,6 +75,7 @@ const copies = {
     title: "管理控制台",
     players: "玩家",
     quests: "关卡",
+    codex: "知识库",
     server: "服务器",
     editorial: "内容审核",
     search: "搜索玩家名或邮箱",
@@ -69,6 +86,11 @@ const copies = {
     cleared: "通关数",
     newQuest: "增添关卡",
     editQuest: "编辑关卡",
+    newCodex: "新增知识条目",
+    editCodex: "编辑知识条目",
+    codexFields: "Algorithm Codex 知识内容",
+    codexDelete: "删除覆盖内容",
+    codexDeleteHint: "删除内置条目的覆盖内容会恢复默认版本；自定义条目会被移除。",
     archive: "归档关卡",
     restoreHint: "归档不会清除数据库记录，但玩家地图将不再显示该关卡。",
     publicFields: "玩家可见的关卡信息",
@@ -89,6 +111,7 @@ const copies = {
     title: "管理コンソール",
     players: "プレイヤー",
     quests: "クエスト",
+    codex: "CODEX",
     server: "サーバー",
     editorial: "投稿審査",
     search: "名前またはメールを検索",
@@ -99,6 +122,11 @@ const copies = {
     cleared: "クリア数",
     newQuest: "クエスト追加",
     editQuest: "クエスト編集",
+    newCodex: "CODEX 項目を追加",
+    editCodex: "CODEX 項目を編集",
+    codexFields: "ALGORITHM CODEX ナレッジ",
+    codexDelete: "上書きを削除",
+    codexDeleteHint: "組み込み項目は既定版へ戻り、カスタム項目は削除されます。",
     archive: "クエストをアーカイブ",
     restoreHint: "アーカイブ後もDB記録は残り、プレイヤーマップから非表示になります。",
     publicFields: "公開クエスト情報",
@@ -181,6 +209,65 @@ function defaultJudge(quest: Quest): JudgeQuestDefinition {
         expected: `${quest.problem?.sampleOutput ?? ""}\n`,
       },
     ],
+  };
+}
+
+function editableCodexEntry(
+  entry: CodexEntry,
+  sortOrder: number,
+): ManagedCodexEntry {
+  return {
+    ...structuredClone(entry),
+    published: true,
+    sortOrder,
+  };
+}
+
+function blankCodexEntry(index: number): ManagedCodexEntry {
+  const id = `custom-entry-${Date.now().toString(36)}`;
+  return {
+    id,
+    category: "algorithms",
+    questId: "signal-fire",
+    marker: "++",
+    title: { en: "New Codex entry", "zh-CN": "新知识条目", ja: "新しい CODEX 項目" },
+    summary: { en: "Short summary.", "zh-CN": "简短摘要。", ja: "短い概要。" },
+    explanation: {
+      en: "Explain the idea, invariant and when to use it.",
+      "zh-CN": "说明核心思想、不变量与适用场景。",
+      ja: "考え方、不変条件、利用場面を説明します。",
+    },
+    checkpoints: [
+      { en: "Check the invariant.", "zh-CN": "检查不变量。", ja: "不変条件を確認する。" },
+    ],
+    timeComplexity: "O(?)",
+    spaceComplexity: "O(?)",
+    tags: ["custom"],
+    code: "// C++14 reference implementation",
+    published: true,
+    sortOrder: Math.max(100, index * 100),
+  };
+}
+
+function checkpointLines(entry: ManagedCodexEntry, locale: Locale) {
+  return entry.checkpoints.map((checkpoint) => checkpoint[locale] ?? "").join("\n");
+}
+
+function updateCheckpointLines(
+  entry: ManagedCodexEntry,
+  locale: Locale,
+  value: string,
+) {
+  const lines = value.split("\n");
+  const length = Math.max(lines.length, entry.checkpoints.length, 1);
+  return {
+    ...entry,
+    checkpoints: Array.from({ length }, (_, index) => ({
+      en: entry.checkpoints[index]?.en ?? "",
+      "zh-CN": entry.checkpoints[index]?.["zh-CN"] ?? "",
+      ja: entry.checkpoints[index]?.ja ?? "",
+      [locale]: lines[index] ?? "",
+    })).filter((checkpoint) => checkpoint.en || checkpoint["zh-CN"] || checkpoint.ja),
   };
 }
 
@@ -269,6 +356,7 @@ export function AdminConsole({
   const [tab, setTab] = useState<Tab>("players");
   const [players, setPlayers] = useState<ManagedPlayer[]>([]);
   const [records, setRecords] = useState<AdminQuestRecord[]>([]);
+  const [codexRecords, setCodexRecords] = useState<ManagedCodexEntry[]>([]);
   const [server, setServer] = useState<ServerOverview>();
   const [editorials, setEditorials] = useState<EditorialPost[]>([]);
   const [query, setQuery] = useState("");
@@ -279,6 +367,8 @@ export function AdminConsole({
   const [testsText, setTestsText] = useState("[]");
   const [translationsText, setTranslationsText] = useState("{}");
   const [creating, setCreating] = useState(false);
+  const [codexDraft, setCodexDraft] = useState<ManagedCodexEntry>();
+  const [codexStored, setCodexStored] = useState(false);
   const copy = copies[locale];
   const allowed = player?.role === "admin" || player?.role === "owner";
 
@@ -289,6 +379,11 @@ export function AdminConsole({
     const nextRecords = await loadAdminQuests();
     setRecords(nextRecords);
     return nextRecords;
+  }, []);
+  const refreshCodex = useCallback(async () => {
+    const entries = await loadAdminCodexEntries();
+    setCodexRecords(entries);
+    return entries;
   }, []);
   const refreshServer = useCallback(() => loadServerOverview().then(setServer), []);
   const refreshEditorials = useCallback(
@@ -309,6 +404,15 @@ export function AdminConsole({
       setTestsText(JSON.stringify(judgeCopy?.tests ?? [], null, 2));
       setTranslationsText(JSON.stringify(publicCopy.translations ?? {}, null, 2));
       setCreating(isNew);
+      setMessage("");
+    },
+    [],
+  );
+
+  const selectCodex = useCallback(
+    (entry: ManagedCodexEntry, stored: boolean) => {
+      setCodexDraft(structuredClone(entry));
+      setCodexStored(stored);
       setMessage("");
     },
     [],
@@ -347,13 +451,15 @@ export function AdminConsole({
         ? refreshPlayers()
         : tab === "quests"
           ? refreshQuests()
+          : tab === "codex"
+            ? refreshCodex()
           : tab === "editorial"
             ? refreshEditorials()
             : refreshServer();
     void load.catch((error) =>
       setMessage(error instanceof Error ? error.message : "CONTROL LINK FAILED"),
     );
-  }, [open, refreshEditorials, refreshPlayers, refreshQuests, refreshServer, tab]);
+  }, [open, refreshCodex, refreshEditorials, refreshPlayers, refreshQuests, refreshServer, tab]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const questOptions = useMemo(() => {
@@ -378,6 +484,25 @@ export function AdminConsole({
         (right.quest.sortOrder ?? Number(right.quest.index) ?? 9999),
     );
   }, [builtInQuests, records]);
+
+  const codexOptions = useMemo(() => {
+    const stored = new Map(codexRecords.map((entry) => [entry.id, entry]));
+    const merged = codexEntries.map((entry, index) => ({
+      entry: stored.get(entry.id) ?? editableCodexEntry(entry, (index + 1) * 100),
+      stored: stored.has(entry.id),
+      builtIn: true,
+    }));
+    for (const entry of codexRecords) {
+      if (!codexEntries.some((candidate) => candidate.id === entry.id)) {
+        merged.push({ entry, stored: true, builtIn: false });
+      }
+    }
+    return merged.sort(
+      (left, right) =>
+        left.entry.sortOrder - right.entry.sortOrder ||
+        left.entry.id.localeCompare(right.entry.id),
+    );
+  }, [codexRecords]);
 
   const saveQuest = async (event: FormEvent) => {
     event.preventDefault();
@@ -421,6 +546,22 @@ export function AdminConsole({
     }
   };
 
+  const saveCodex = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!codexDraft) return;
+    setMessage("");
+    try {
+      const saved = await saveAdminCodexEntry(codexDraft, !codexStored);
+      setCodexDraft(saved);
+      setCodexStored(true);
+      setMessage("CODEX CATALOG UPDATED");
+      await refreshCodex();
+      window.dispatchEvent(new Event("algoquest:codex-updated"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "CODEX SAVE FAILED");
+    }
+  };
+
   if (!allowed) return null;
 
   return (
@@ -436,7 +577,7 @@ export function AdminConsole({
               <button type="button" onClick={() => setOpen(false)}>[ {copy.close} ]</button>
             </header>
             <nav>
-              {(["players", "quests", "editorial"] as Tab[]).map((item) => (
+              {(["players", "quests", "codex", "editorial"] as Tab[]).map((item) => (
                 <button
                   key={item}
                   className={tab === item ? "is-active" : ""}
@@ -522,6 +663,11 @@ export function AdminConsole({
                     <label>DESCRIPTION (EN)<textarea value={questDraft.description} onChange={(event) => setQuestDraft({ ...questDraft, description: event.target.value })} /></label>
                     <label>STORY (one paragraph per line)<textarea value={questDraft.problem.story.join("\n")} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, story: event.target.value.split("\n").filter(Boolean) } })} /></label>
                     <label>GUIDANCE (one step per line)<textarea value={questDraft.problem.guidance.join("\n")} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, guidance: event.target.value.split("\n").filter(Boolean) } })} /></label>
+                    <label>CODEX WHISPER (HINT)<textarea value={questDraft.problem.hint} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, hint: event.target.value } })} /></label>
+                    <div className="admin-form-grid">
+                      <label>HINT INSERT MARKER<input value={questDraft.problem.hintMarker} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, hintMarker: event.target.value } })} /></label>
+                      <label>HINT CODE<textarea className="admin-code-input" value={questDraft.problem.hintCode} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, hintCode: event.target.value } })} /></label>
+                    </div>
                     <div className="admin-form-grid">
                       <label>PASS SCORE<input type="number" min={1} max={100} value={questDraft.problem.passScore} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, passScore: Number(event.target.value) } })} /></label>
                       <label>TIME (s)<input type="number" min={0.1} max={10} step={0.1} value={questDraft.problem.timeLimitSeconds} onChange={(event) => setQuestDraft({ ...questDraft, problem: { ...questDraft.problem!, timeLimitSeconds: Number(event.target.value) } })} /></label>
@@ -562,6 +708,277 @@ export function AdminConsole({
                   </form>
                 ) : (
                   <div className="admin-empty">&gt; SELECT_OR_CREATE_QUEST</div>
+                )}
+              </div>
+            )}
+
+            {tab === "codex" && (
+              <div className="admin-content admin-quest-layout admin-codex-layout">
+                <aside className="admin-quest-list">
+                  <button
+                    className="admin-add-quest"
+                    onClick={() =>
+                      selectCodex(blankCodexEntry(codexOptions.length + 1), false)
+                    }
+                  >
+                    + {copy.newCodex}
+                  </button>
+                  {codexOptions.map(({ entry, stored, builtIn }) => (
+                    <button
+                      key={entry.id}
+                      className={codexDraft?.id === entry.id ? "is-active" : ""}
+                      onClick={() => selectCodex(entry, stored)}
+                    >
+                      <span>{entry.marker}</span>
+                      <strong>{entry.title[locale] ?? entry.title.en}</strong>
+                      <small>
+                        {builtIn ? "BUILT-IN" : "CUSTOM"}
+                        {stored ? " / EDITED" : ""}
+                      </small>
+                    </button>
+                  ))}
+                </aside>
+                {codexDraft ? (
+                  <form className="admin-quest-form" onSubmit={saveCodex}>
+                    <h3>{codexStored ? copy.editCodex : copy.newCodex}</h3>
+                    <p className="admin-section-label">{copy.codexFields}</p>
+                    <div className="admin-form-grid">
+                      <label>
+                        ID
+                        <input
+                          value={codexDraft.id}
+                          disabled={codexStored}
+                          onChange={(event) =>
+                            setCodexDraft({ ...codexDraft, id: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label>
+                        CATEGORY
+                        <select
+                          value={codexDraft.category}
+                          onChange={(event) =>
+                            setCodexDraft({
+                              ...codexDraft,
+                              category: event.target.value as CodexCategory,
+                            })
+                          }
+                        >
+                          {codexCategories.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        RELATED QUEST ID
+                        <input
+                          value={codexDraft.questId}
+                          onChange={(event) =>
+                            setCodexDraft({ ...codexDraft, questId: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label>
+                        MARKER
+                        <input
+                          value={codexDraft.marker}
+                          maxLength={8}
+                          onChange={(event) =>
+                            setCodexDraft({ ...codexDraft, marker: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label>
+                        SORT ORDER
+                        <input
+                          type="number"
+                          min={0}
+                          max={999999}
+                          value={codexDraft.sortOrder}
+                          onChange={(event) =>
+                            setCodexDraft({
+                              ...codexDraft,
+                              sortOrder: Number(event.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="admin-check">
+                        <input
+                          type="checkbox"
+                          checked={codexDraft.published}
+                          onChange={(event) =>
+                            setCodexDraft({
+                              ...codexDraft,
+                              published: event.target.checked,
+                            })
+                          }
+                        />
+                        PUBLISHED
+                      </label>
+                    </div>
+
+                    {(["en", "zh-CN", "ja"] as Locale[]).map((language) => (
+                      <div className="admin-codex-language" key={language}>
+                        <p className="admin-section-label">{language.toUpperCase()}</p>
+                        <label>
+                          TITLE
+                          <input
+                            value={codexDraft.title[language]}
+                            onChange={(event) =>
+                              setCodexDraft({
+                                ...codexDraft,
+                                title: {
+                                  ...codexDraft.title,
+                                  [language]: event.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          SUMMARY
+                          <textarea
+                            value={codexDraft.summary[language]}
+                            onChange={(event) =>
+                              setCodexDraft({
+                                ...codexDraft,
+                                summary: {
+                                  ...codexDraft.summary,
+                                  [language]: event.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          EXPLANATION
+                          <textarea
+                            value={codexDraft.explanation[language]}
+                            onChange={(event) =>
+                              setCodexDraft({
+                                ...codexDraft,
+                                explanation: {
+                                  ...codexDraft.explanation,
+                                  [language]: event.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          CHECKPOINTS (ONE PER LINE)
+                          <textarea
+                            value={checkpointLines(codexDraft, language)}
+                            onChange={(event) =>
+                              setCodexDraft(
+                                updateCheckpointLines(
+                                  codexDraft,
+                                  language,
+                                  event.target.value,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ))}
+
+                    <div className="admin-form-grid">
+                      <label>
+                        TIME COMPLEXITY
+                        <input
+                          value={codexDraft.timeComplexity}
+                          onChange={(event) =>
+                            setCodexDraft({
+                              ...codexDraft,
+                              timeComplexity: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        SPACE COMPLEXITY
+                        <input
+                          value={codexDraft.spaceComplexity}
+                          onChange={(event) =>
+                            setCodexDraft({
+                              ...codexDraft,
+                              spaceComplexity: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      TAGS (COMMA SEPARATED)
+                      <input
+                        value={codexDraft.tags.join(", ")}
+                        onChange={(event) =>
+                          setCodexDraft({
+                            ...codexDraft,
+                            tags: event.target.value
+                              .split(",")
+                              .map((tag) => tag.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      REFERENCE IMPLEMENTATION // C++14
+                      <textarea
+                        className="admin-code-input admin-tests-input"
+                        value={codexDraft.code}
+                        onChange={(event) =>
+                          setCodexDraft({ ...codexDraft, code: event.target.value })
+                        }
+                      />
+                    </label>
+                    <div className="admin-quest-actions">
+                      <button type="submit">[ {copy.save} ]</button>
+                      {codexStored && (
+                        <button
+                          type="button"
+                          className="is-danger"
+                          onClick={() => {
+                            void (async () => {
+                              await deleteAdminCodexEntry(codexDraft.id);
+                              const builtIn = codexEntries.find(
+                                (entry) => entry.id === codexDraft.id,
+                              );
+                              await refreshCodex();
+                              setCodexDraft(
+                                builtIn
+                                  ? editableCodexEntry(
+                                      builtIn,
+                                      (codexEntries.indexOf(builtIn) + 1) * 100,
+                                    )
+                                  : undefined,
+                              );
+                              setCodexStored(false);
+                              window.dispatchEvent(
+                                new Event("algoquest:codex-updated"),
+                              );
+                            })().catch((error) =>
+                              setMessage(
+                                error instanceof Error
+                                  ? error.message
+                                  : "CODEX DELETE FAILED",
+                              ),
+                            );
+                          }}
+                        >
+                          [ {copy.codexDelete} ]
+                        </button>
+                      )}
+                    </div>
+                    <p className="admin-secure-note">{copy.codexDeleteHint}</p>
+                  </form>
+                ) : (
+                  <div className="admin-empty">&gt; SELECT_OR_CREATE_CODEX_ENTRY</div>
                 )}
               </div>
             )}

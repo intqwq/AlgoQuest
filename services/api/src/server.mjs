@@ -20,6 +20,13 @@ import {
   cachedTerminalSubmission,
   upstreamFailure,
 } from "./judge-status.mjs";
+import {
+  oiAlgorithmTags,
+  OjValidationError,
+  publicOjProblem,
+  trustedOjQuest,
+  validateOjProblem,
+} from "./oj.mjs";
 import { missingPrerequisites, questPrerequisites } from "./quests.mjs";
 import {
   createTurnstileVerifier,
@@ -184,6 +191,21 @@ function requireOwner(player) {
 
 function validQuestId(value) {
   return typeof value === "string" && /^[a-z0-9-]{1,96}$/.test(value);
+}
+
+function validUuid(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function validatedOjProblem(value) {
+  try {
+    return validateOjProblem(value);
+  } catch (error) {
+    if (error instanceof OjValidationError) {
+      throw new ApiError(400, error.code);
+    }
+    throw error;
+  }
 }
 
 function cleanRole(value) {
@@ -455,6 +477,41 @@ const server = http.createServer(async (request, response) => {
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/v1/oj/tags") {
+      return json(response, 200, { tags: oiAlgorithmTags });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/oj/problems") {
+      const query = boundedText(url.searchParams.get("query"), 160);
+      const requestedDifficulty = Number(url.searchParams.get("difficulty"));
+      const difficulty = Number.isInteger(requestedDifficulty) && requestedDifficulty >= 1 && requestedDifficulty <= 10
+        ? requestedDifficulty
+        : undefined;
+      const tag = boundedText(url.searchParams.get("tag"), 80);
+      const page = Math.max(1, Math.round(Number(url.searchParams.get("page")) || 1));
+      const limit = Math.min(60, Math.max(1, Math.round(Number(url.searchParams.get("limit")) || 30)));
+      const result = await database.listPublishedOjProblems({
+        query,
+        difficulty,
+        tag,
+        limit,
+        offset: (page - 1) * limit,
+      });
+      return json(response, 200, {
+        problems: result.problems.map((problem) => publicOjProblem(problem, { includeStatement: false })),
+        total: result.total,
+        page,
+        limit,
+      });
+    }
+
+    const publicOjProblemMatch = url.pathname.match(/^\/v1\/oj\/problems\/(\d{1,12})$/);
+    if (request.method === "GET" && publicOjProblemMatch) {
+      const problem = await database.getPublishedOjProblem(Number(publicOjProblemMatch[1]));
+      if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
+      return json(response, 200, { problem: publicOjProblem(problem) });
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/sessions") {
       await applyAuthRateLimit(request, "guest_session", undefined, 30, 3600);
       const body = await readJson(request, 4 * 1024);
@@ -627,6 +684,49 @@ const server = http.createServer(async (request, response) => {
       return json(response, 200, { player });
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/oj/problems") {
+      requirePlayableAccount(player);
+      const allowed = await database.consumeRateLimit(
+        "oj_problem_submit:user",
+        player.id,
+        10,
+        60 * 60,
+      );
+      if (!allowed) throw new ApiError(429, "OJ_SUBMISSION_RATE_LIMITED", { retryAfterMs: 60 * 60 * 1000 });
+      const body = await readJson(request, 8 * 1024 * 1024);
+      return json(response, 201, {
+        problem: await database.createOjProblem(player.id, validatedOjProblem(body)),
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/oj/mine") {
+      requirePlayableAccount(player);
+      return json(response, 200, {
+        problems: await database.listAuthorOjProblems(player.id),
+      });
+    }
+
+    const ojDraftMatch = url.pathname.match(/^\/v1\/oj\/drafts\/([0-9a-f-]{36})$/i);
+    if (request.method === "PUT" && ojDraftMatch) {
+      requirePlayableAccount(player);
+      if (!validUuid(ojDraftMatch[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
+      const allowed = await database.consumeRateLimit(
+        "oj_problem_resubmit:user",
+        player.id,
+        20,
+        60 * 60,
+      );
+      if (!allowed) throw new ApiError(429, "OJ_SUBMISSION_RATE_LIMITED", { retryAfterMs: 60 * 60 * 1000 });
+      const body = await readJson(request, 8 * 1024 * 1024);
+      const problem = await database.updateOjProblemDraft(
+        ojDraftMatch[1],
+        player.id,
+        validatedOjProblem(body),
+      );
+      if (!problem) throw new ApiError(404, "OJ_DRAFT_NOT_FOUND");
+      return json(response, 200, { problem });
+    }
+
     const editorialQuestMatch = url.pathname.match(
       /^\/v1\/editorial\/quests\/([a-z0-9-]{1,96})$/,
     );
@@ -774,6 +874,39 @@ const server = http.createServer(async (request, response) => {
           status,
         }),
       });
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/admin/oj/problems") {
+      requireAdmin(player);
+      const requestedStatus = url.searchParams.get("status");
+      const status = ["pending", "published", "rejected"].includes(requestedStatus)
+        ? requestedStatus
+        : "pending";
+      return json(response, 200, {
+        problems: await database.listOjProblemsForModeration(status),
+      });
+    }
+
+    const ojModerationMatch = url.pathname.match(/^\/v1\/admin\/oj\/problems\/([0-9a-f-]{36})$/i);
+    if (request.method === "PATCH" && ojModerationMatch) {
+      requireAdmin(player);
+      if (!validUuid(ojModerationMatch[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
+      const body = await readJson(request, 8 * 1024);
+      if (body.status !== "published" && body.status !== "rejected") {
+        throw new ApiError(400, "INVALID_OJ_REVIEW_STATUS");
+      }
+      const reviewNote = boundedText(body.reviewNote, 1000);
+      if (body.status === "rejected" && reviewNote.length < 3) {
+        throw new ApiError(400, "OJ_REJECTION_REASON_REQUIRED");
+      }
+      const problem = await database.moderateOjProblem(
+        ojModerationMatch[1],
+        body.status,
+        player.id,
+        reviewNote,
+      );
+      if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_REVIEWABLE");
+      return json(response, 200, { problem });
     }
 
     const editorialModerationMatch = url.pathname.match(
@@ -1190,6 +1323,56 @@ const server = http.createServer(async (request, response) => {
       return json(response, upstream.status, result, headers);
     }
 
+    const ojSubmissionMatch = url.pathname.match(/^\/v1\/oj\/problems\/(\d{1,12})\/submissions$/);
+    if (request.method === "POST" && ojSubmissionMatch) {
+      requirePlayableAccount(player);
+      const body = await readJson(request, 80 * 1024);
+      const settings = await database.getServerSettings();
+      if (!settings.judgeEnabled) throw new ApiError(503, "JUDGE_DISABLED");
+      const problem = await database.getPublishedOjProblem(Number(ojSubmissionMatch[1]));
+      if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
+      const reservation = await database.reserveSubmission(
+        player.id,
+        settings.submissionCooldownSeconds,
+      );
+      if (!reservation.allowed) {
+        return json(response, 429, {
+          error: "SUBMISSION_COOLDOWN",
+          retryAfterMs: reservation.retryAfterMs,
+        }, {
+          "retry-after": String(Math.max(1, Math.ceil(reservation.retryAfterMs / 1000))),
+        });
+      }
+      const questId = `oj-${problem.publicId}`;
+      const upstream = await judgeRequest("/v1/submissions", {
+        method: "POST",
+        headers: judgeHeaders(player.id, "application/json"),
+        body: JSON.stringify({
+          questId,
+          source: body.source,
+          language: "cpp14",
+          mode: "submit",
+          trustedQuest: trustedOjQuest(problem),
+        }),
+      });
+      const result = await readUpstreamJson(upstream);
+      if (upstream.ok && result.submission?.id) {
+        await database.createSubmission(
+          player.id,
+          result.submission.id,
+          questId,
+          result.submission.status,
+          body.source,
+          "cpp14",
+          "submit",
+        );
+      }
+      const headers = {};
+      const retryAfter = upstream.headers.get("retry-after");
+      if (retryAfter) headers["retry-after"] = retryAfter;
+      return json(response, upstream.status, result, headers);
+    }
+
     const submissionMatch = url.pathname.match(
       /^\/v1\/judge\/submissions\/([0-9a-f-]+)$/,
     );
@@ -1251,15 +1434,17 @@ const server = http.createServer(async (request, response) => {
           if (score < passScore) {
             return json(response, 200, result);
           }
-          try {
-            await database.saveProgress(
-              player.id,
-              record.questId,
-              "cleared",
-              score,
-            );
-          } catch (error) {
-            console.error("Accepted progress persistence failed:", error.message);
+          if (!record.questId.startsWith("oj-")) {
+            try {
+              await database.saveProgress(
+                player.id,
+                record.questId,
+                "cleared",
+                score,
+              );
+            } catch (error) {
+              console.error("Accepted progress persistence failed:", error.message);
+            }
           }
         }
       }

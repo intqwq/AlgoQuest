@@ -123,7 +123,7 @@ export function QuestPrologue({
       }}
     >
       <section
-        className={`prologue-dialog ${scene ? `prologue-dialog--${scene.effect}` : ""}`}
+        className="prologue-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="prologue-title"
@@ -149,14 +149,7 @@ export function QuestPrologue({
             </div>
           </div>
         ) : scene ? (
-          <div className={`story-scene story-scene--${scene.mode}`}>
-            <div className="story-stage" aria-hidden="true">
-              <span>{scene.note}</span>
-              <pre>{scene.glyph}</pre>
-              <i />
-              <i />
-              <i />
-            </div>
+          <div className="story-scene">
             <div className="story-dialogue-box">
               <span>{scene.speaker}</span>
               <h2 id="prologue-title">{quest.title}</h2>

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   computeStreak,
@@ -50,3 +51,29 @@ test("submission diff reports line additions and removals", () => {
   assert.equal(diff.summary.unchanged, 1);
 });
 
+test("Codex writes remain behind the administrator role gate", async () => {
+  const [playerRoutes, adminRoutes, validationStart, validationEnd] = await Promise.all([
+    readFile(
+      new URL("../src/learning-extension.parts/06.jsfrag", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/learning-extension.parts/07.jsfrag", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/learning-extension.parts/04.jsfrag", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/learning-extension.parts/05.jsfrag", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  const validation = validationStart + validationEnd;
+  assert.match(playerRoutes, /requireAdmin\(player\);/);
+  assert.match(adminRoutes, /\/v1\/admin\/codex/);
+  assert.match(adminRoutes, /validateCodex/);
+  assert.match(validation, /function validateCodex/);
+  assert.match(validation, /code\.slice\(0, 64 \* 1024\)/);
+});

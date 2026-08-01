@@ -36,9 +36,11 @@ test("Codex contains a complete learning path linked to campaign quests", async 
   assert.match(data, /checkpoints/);
 });
 
-test("Codex UI supports search, categories, progress and quest launch", async () => {
-  const [component, page, css] = await Promise.all([
+test("Codex UI supports search, managed entries, progress and quest launch", async () => {
+  const [component, admin, client, page, css] = await Promise.all([
     read("components/codex-library.tsx"),
+    read("components/admin-console.tsx"),
+    read("lib/api-client.ts"),
     read("app/page.tsx"),
     read("app/globals.css"),
   ]);
@@ -47,6 +49,8 @@ test("Codex UI supports search, categories, progress and quest launch", async ()
   assert.match(component, /type="search"/);
   assert.match(component, /codexCategories\.map/);
   assert.match(component, /discoveredCount/);
+  assert.match(component, /loadPublishedCodexEntries/);
+  assert.match(component, /algoquest:codex-updated/);
   assert.match(component, /REFERENCE IMPLEMENTATION \/\/ C\+\+14/);
   assert.match(component, /onOpenQuest\(selected\.questId\)/);
   assert.match(
@@ -57,5 +61,9 @@ test("Codex UI supports search, categories, progress and quest launch", async ()
   assert.match(css, /\.codex-section/);
   assert.match(css, /\.codex-layout/);
   assert.match(css, /\.codex-reader/);
+  assert.match(admin, /tab === "codex"/);
+  assert.match(admin, /saveAdminCodexEntry/);
+  assert.match(admin, /deleteAdminCodexEntry/);
+  assert.match(client, /\/admin\/codex/);
+  assert.match(client, /loadPublishedCodexEntries/);
 });
-

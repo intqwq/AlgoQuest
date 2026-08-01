@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountPanel } from "@/components/account-panel";
 import { AdminConsole } from "@/components/admin-console";
 import { CodexLibrary } from "@/components/codex-library";
+import { OjHub } from "@/components/oj-hub";
 import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
@@ -147,6 +148,7 @@ export default function Home() {
   const [locale, setLocale] = useState<Locale>("en");
   const [notice, setNotice] = useState("ACCOUNT REQUIRED // WELCOME MODE");
   const [screen, setScreen] = useState<"world" | "mission">("world");
+  const [portal, setPortal] = useState<"learn" | "oj">("learn");
   const [cleared, setCleared] = useState<Set<string>>(new Set());
   const [player, setPlayer] = useState<Player>();
   const [playerSave, setPlayerSave] = useState<PlayerSave>();
@@ -486,6 +488,7 @@ export default function Home() {
       return;
     }
     setSelected(quest);
+    setPortal("learn");
     setNotice(`QUEST ${quest.index} LAUNCHED // JUDGE LINK ACTIVE`);
     setScreen("mission");
     window.history.replaceState(null, "", `#mission/${quest.id}`);
@@ -554,27 +557,34 @@ export default function Home() {
       <div className="scanlines" aria-hidden="true" />
 
       <header className="topbar">
-        <a className="wordmark" href="#top" aria-label="AlgoQuest home">
+        <a className="wordmark" href="#top" aria-label="AlgoQuest home" onClick={() => { setPortal("learn"); setScreen("world"); }}>
           <span>AQ</span>
           AlgoQuest
         </a>
         <nav aria-label="Main navigation">
           {canPlay ? (
             <>
-              <a className="active" href="#map">
+              <a className={portal === "learn" ? "active" : ""} href="#map" onClick={() => { setPortal("learn"); setScreen("world"); }}>
                 [ {copy.worldMap} ]
               </a>
-              <a href="#missions">[ {copy.missions} ]</a>
-              <a href="#codex">[ {copy.codex} ]</a>
+              <a href="#missions" onClick={() => { setPortal("learn"); setScreen("world"); }}>[ {copy.missions} ]</a>
+              <a href="#codex" onClick={() => { setPortal("learn"); setScreen("world"); }}>[ {copy.codex} ]</a>
             </>
           ) : (
             <>
-              <a className="active" href="#top">
+              <a className={portal === "learn" ? "active" : ""} href="#top" onClick={() => setPortal("learn")}>
                 [ {copy.welcome} ]
               </a>
-              <a href="#how-it-works">[ {copy.howItWorks} ]</a>
+              <a href="#how-it-works" onClick={() => setPortal("learn")}>[ {copy.howItWorks} ]</a>
             </>
           )}
+          <button
+            type="button"
+            className={portal === "oj" ? "active" : ""}
+            onClick={() => { setPortal("oj"); setScreen("world"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          >
+            [ OJ ]
+          </button>
           {canManage && (
             <button
               type="button"
@@ -680,7 +690,16 @@ export default function Home() {
         </div>
       )}
 
-      {screen === "mission" && canPlay && playerSave ? (
+      {portal === "oj" ? (
+        <>
+          <OjHub player={player} locale={locale} onLogin={() => openAccount("login")} />
+          <footer>
+            <span>© 2026 ALGOQUEST PROJECT</span>
+            <span>OJ // COMMUNITY PROBLEM ARCHIVE</span>
+            <a href="#oj-top">[ {copy.backToTop} ]</a>
+          </footer>
+        </>
+      ) : screen === "mission" && canPlay && playerSave ? (
         <MissionTerminal
           key={selected.id}
           quest={selectedDisplay}
