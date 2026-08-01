@@ -21,7 +21,7 @@ test("the first campaign chapter has complete hidden test suites", () => {
   );
 });
 
-test("all twelve campaign quests have complete trusted Judge suites", () => {
+test("the complete campaign has trusted Judge suites", () => {
   const campaignIds = [
     "signal-fire",
     "forked-path",
@@ -35,6 +35,16 @@ test("all twelve campaign quests have complete trusted Judge suites", () => {
     "dijkstra-citadel",
     "union-forge",
     "topological-crown",
+    "recursive-mirror",
+    "greedy-caravan",
+    "knapsack-forge",
+    "lis-observatory",
+    "mst-skybridge",
+    "fenwick-pulse",
+    "segment-bastion",
+    "lca-oracle",
+    "scc-nexus",
+    "maxflow-reactor",
   ];
   assert.equal(Object.keys(quests).length, campaignIds.length);
   for (const questId of campaignIds) {

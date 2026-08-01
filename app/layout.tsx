@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 import "./turnstile-fix.css";
 

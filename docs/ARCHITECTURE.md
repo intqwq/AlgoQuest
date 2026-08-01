@@ -63,7 +63,11 @@ upstream at an internal hostname, Tailnet address, or protected tunnel.
 The `web` service builds and serves the Vinext/React application. It contains:
 
 - the ASCII-art world and responsive quest map;
-- seven built-in C++14 missions;
+- 22 built-in C++14 missions from first input through maximum flow;
+- adaptive recommended starting points based on prior C++ and algorithm
+  experience;
+- a mandatory first-use interface tutorial and skippable, replayable quest
+  prologues;
 - support for merging database-backed quest overrides and custom quests;
 - administrator-editable map positions with collision-aware placement;
 - a lazy-loaded, self-hosted Monaco mission editor;
@@ -312,6 +316,12 @@ Solution by player:
 Discussion or solution by administrator/owner:
   published immediately
 ```
+
+Editorial bodies are persisted as either legacy `plain` text or
+`tiptap-json-v1`. Rich documents support typography, lists, links,
+syntax-highlighted code and KaTeX nodes. The Core API validates the document
+tree, style allowlists, link protocols, depth, node count and byte limits before
+PostgreSQL receives it; browser-supplied HTML is never stored.
 
 ## HTTP boundaries
 

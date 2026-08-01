@@ -11,6 +11,7 @@ import {
 import type { Locale } from "@/lib/i18n";
 import { Quest } from "@/lib/quests";
 import { EditorialPanel } from "@/components/editorial-panel";
+import { QuestPrologue } from "@/components/quest-prologue";
 
 type Verdict = "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
 type JudgeState =
@@ -104,6 +105,7 @@ const missionMessages = {
     noEvaluations: "NO EVALUATIONS RECORDED FOR THIS QUEST.",
     autosave: "autosave: code + evaluations // device + cloud",
     editorial: "EDITORIAL",
+    story: "STORY",
   },
   "zh-CN": {
     worldMap: "世界地图",
@@ -135,6 +137,7 @@ const missionMessages = {
     noEvaluations: "本关暂无评测记录。",
     autosave: "自动保存：代码与评测记录 // 本地 + 云端",
     editorial: "讨论 / 题解",
+    story: "故事",
   },
   ja: {
     worldMap: "ワールドマップ",
@@ -166,6 +169,7 @@ const missionMessages = {
     noEvaluations: "このクエストの評価履歴はありません。",
     autosave: "自動保存：コードと評価 // 端末 + クラウド",
     editorial: "解説 / 議論",
+    story: "ストーリー",
   },
 } as const;
 
@@ -293,6 +297,10 @@ export function MissionTerminal({
   onDraftChange,
   onSubmission,
   locale,
+  tutorialRequired,
+  storySeen,
+  onTutorialComplete,
+  onStoryComplete,
 }: {
   quest: Quest;
   nextQuestTitle?: string;
@@ -303,6 +311,10 @@ export function MissionTerminal({
   onDraftChange: (questId: string, source: string) => void;
   onSubmission: (submission: SaveSubmission) => void;
   locale: Locale;
+  tutorialRequired: boolean;
+  storySeen: boolean;
+  onTutorialComplete: () => Promise<void> | void;
+  onStoryComplete: (questId: string) => Promise<void> | void;
 }) {
   const problem = quest.problem;
   if (!problem) {
@@ -333,6 +345,9 @@ export function MissionTerminal({
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [editorReady, setEditorReady] = useState(false);
   const [editorialOpen, setEditorialOpen] = useState(false);
+  const [prologueOpen, setPrologueOpen] = useState(
+    tutorialRequired || !storySeen,
+  );
   const copy = missionMessages[locale];
 
   useEffect(() => {
@@ -622,6 +637,16 @@ export function MissionTerminal({
 
   return (
     <section className="mission-terminal">
+      {prologueOpen && (
+        <QuestPrologue
+          quest={quest}
+          locale={locale}
+          tutorialRequired={tutorialRequired}
+          onTutorialComplete={onTutorialComplete}
+          onStoryComplete={() => onStoryComplete(quest.id)}
+          onClose={() => setPrologueOpen(false)}
+        />
+      )}
       <EditorialPanel
         quest={quest}
         locale={locale}
@@ -675,6 +700,9 @@ export function MissionTerminal({
           <span>C++14</span>
           <span>TIME {problem.timeLimitSeconds.toFixed(1)}s</span>
           <span>MEM {problem.memoryLimitMb}MB</span>
+          <button type="button" onClick={() => setPrologueOpen(true)}>
+            [ {copy.story} ]
+          </button>
         </div>
       </div>
 

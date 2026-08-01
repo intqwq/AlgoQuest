@@ -825,6 +825,7 @@ int main() {
       memoryLimitMb: 160,
     },
   },
+  ...advancedQuests,
   {
     id: "nameless-room",
     index: "??",
@@ -842,10 +843,16 @@ int main() {
   },
 ];
 
-export function isQuestUnlocked(quest: Quest, cleared: Set<string>) {
+export function isQuestUnlocked(
+  quest: Quest,
+  cleared: Set<string>,
+  recommendedQuestId?: string,
+) {
   return (
     quest.status !== "secret" &&
     quest.problem !== undefined &&
-    quest.prerequisites.every((questId) => cleared.has(questId))
+    (quest.id === recommendedQuestId ||
+      quest.prerequisites.every((questId) => cleared.has(questId)))
   );
 }
+import { advancedQuests } from "@/lib/advanced-quests";

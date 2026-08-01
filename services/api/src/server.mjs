@@ -13,6 +13,10 @@ import {
 import { createDatabase, migrateWithRetry } from "./database.mjs";
 import { createEmailService } from "./email.mjs";
 import {
+  EditorialContentError,
+  validateEditorialContent,
+} from "./editorial-content.mjs";
+import {
   cachedTerminalSubmission,
   upstreamFailure,
 } from "./judge-status.mjs";
@@ -388,7 +392,7 @@ async function health() {
   return result;
 }
 
-async function resolveQuestAccess(questId, progress) {
+async function resolveQuestAccess(questId, progress, player) {
   const record = await database.getQuestRecord(questId);
   if (record) {
     if (record.archived) return undefined;
@@ -397,15 +401,21 @@ async function resolveQuestAccess(questId, progress) {
         .filter((item) => item.status === "cleared")
         .map((item) => item.questId),
     );
+    const missing = (record.publicDefinition.prerequisites ?? []).filter(
+      (requiredId) => !cleared.has(requiredId),
+    );
     return {
       record,
-      missing: (record.publicDefinition.prerequisites ?? []).filter(
-        (requiredId) => !cleared.has(requiredId),
-      ),
+      missing: player?.recommendedQuestId === questId ? [] : missing,
     };
   }
   const missing = missingPrerequisites(questId, progress);
-  return missing === undefined ? undefined : { record: undefined, missing };
+  return missing === undefined
+    ? undefined
+    : {
+        record: undefined,
+        missing: player?.recommendedQuestId === questId ? [] : missing,
+      };
 }
 
 const server = http.createServer(async (request, response) => {
@@ -475,6 +485,8 @@ const server = http.createServer(async (request, response) => {
         displayName: input.displayName,
         email: input.email,
         passwordHash,
+        hasCppFoundation: body.hasCppFoundation === true,
+        hasAlgorithmFoundation: body.hasAlgorithmFoundation === true,
       });
       const verification = registration.created
         ? registration
@@ -647,7 +659,7 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (request.method === "POST") {
-        const body = await readJson(request, 80 * 1024);
+        const body = await readJson(request, 160 * 1024);
         if (body.kind !== "discussion" && body.kind !== "solution") {
           throw new ApiError(400, "INVALID_EDITORIAL_KIND");
         }
@@ -663,9 +675,20 @@ const server = http.createServer(async (request, response) => {
           );
         }
         const title = boundedText(body.title, 160);
-        const content = boundedText(body.content, 60 * 1024);
-        if (title.length < 3 || content.length < 10) {
+        if (title.length < 3) {
           throw new ApiError(400, "EDITORIAL_CONTENT_REQUIRED");
+        }
+        let editorialContent;
+        try {
+          editorialContent = validateEditorialContent(
+            body.content,
+            body.contentFormat,
+          );
+        } catch (error) {
+          if (error instanceof EditorialContentError) {
+            throw new ApiError(400, error.code);
+          }
+          throw error;
         }
         const post = await database.createEditorialPost({
           id: crypto.randomUUID(),
@@ -673,7 +696,8 @@ const server = http.createServer(async (request, response) => {
           authorId: player.id,
           kind: body.kind,
           title,
-          content,
+          content: editorialContent.content,
+          contentFormat: editorialContent.contentFormat,
           status: body.kind === "discussion" || moderator ? "published" : "pending",
         });
         return json(response, 201, { post });
@@ -941,7 +965,50 @@ const server = http.createServer(async (request, response) => {
         throw new ApiError(400, "DISPLAY_NAME_REQUIRED");
       }
       return json(response, 200, {
-        player: await database.updateProfile(player.id, displayName),
+        player: await database.updateProfile(player.id, {
+          displayName,
+          hasCppFoundation: body.hasCppFoundation === true,
+          hasAlgorithmFoundation: body.hasAlgorithmFoundation === true,
+        }),
+      });
+    }
+
+    if (
+      request.method === "PUT" &&
+      url.pathname === "/v1/me/learning/tutorial"
+    ) {
+      requirePlayableAccount(player);
+      return json(response, 200, {
+        player: await database.completeWebTutorial(player.id),
+      });
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/v1/me/learning/stories"
+    ) {
+      requirePlayableAccount(player);
+      return json(response, 200, {
+        stories: await database.listQuestStoryProgress(player.id),
+      });
+    }
+
+    const storyProgressMatch = url.pathname.match(
+      /^\/v1\/me\/learning\/stories\/([a-z0-9-]{1,96})$/,
+    );
+    if (request.method === "PUT" && storyProgressMatch) {
+      requirePlayableAccount(player);
+      const access = await resolveQuestAccess(
+        storyProgressMatch[1],
+        await database.listProgress(player.id),
+        player,
+      );
+      if (!access) throw new ApiError(404, "UNKNOWN_QUEST");
+      return json(response, 200, {
+        story: await database.completeQuestStory(
+          player.id,
+          storyProgressMatch[1],
+        ),
       });
     }
 
@@ -1069,6 +1136,7 @@ const server = http.createServer(async (request, response) => {
       const access = await resolveQuestAccess(
         body.questId,
         await database.listProgress(player.id),
+        player,
       );
       if (!access) {
         return json(response, 404, { error: "UNKNOWN_QUEST" });

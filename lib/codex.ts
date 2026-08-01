@@ -1,4 +1,5 @@
 import type { Locale } from "@/lib/i18n";
+import { advancedCodexEntries } from "@/lib/advanced-codex";
 
 export type CodexCategory =
   | "fundamentals"
@@ -432,4 +433,5 @@ while (!ready.empty()) {
         if (--indegree[v] == 0) ready.push(v);
 }`,
   },
+  ...advancedCodexEntries,
 ];

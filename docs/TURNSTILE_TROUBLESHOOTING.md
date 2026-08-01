@@ -89,3 +89,4 @@ https://challenges.cloudflare.com/cdn-cgi/challenge-platform/...
 Error `110200` means the current hostname is not authorized. Error `200500` means the Turnstile iframe could not load, commonly because a browser extension, proxy, DNS filter, or network rule blocked Cloudflare Challenges.
 
 If a Content Security Policy is added later, allow `https://challenges.cloudflare.com` in both `script-src` and `frame-src`.
+

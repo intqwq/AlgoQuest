@@ -87,6 +87,7 @@ export function createEditorialListQuery({
        p.kind,
        p.title,
        p.content,
+       p.content_format,
        p.status,
        p.created_at,
        p.updated_at,
@@ -162,6 +163,13 @@ export function createDatabase(databaseUrl) {
           emailVerified: false,
           isGuest: true,
           role: "player",
+          learningProfile: {
+            hasCppFoundation: false,
+            hasAlgorithmFoundation: false,
+            configured: false,
+          },
+          tutorialCompleted: false,
+          recommendedQuestId: "signal-fire",
         },
       };
     },
@@ -169,7 +177,9 @@ export function createDatabase(databaseUrl) {
     async authenticate(token) {
       const result = await pool.query(
         `SELECT
-           u.id, u.display_name, u.email, u.email_verified_at, u.is_guest, u.role
+           u.id, u.display_name, u.email, u.email_verified_at, u.is_guest, u.role,
+           u.has_cpp_foundation, u.has_algorithm_foundation,
+           u.learning_profile_set, u.web_tutorial_completed_at
            FROM sessions s
            JOIN users u ON u.id = s.user_id
           WHERE s.token_hash = $1 AND s.expires_at > now()`,
@@ -185,7 +195,14 @@ export function createDatabase(databaseUrl) {
       return result.rows[0].attempts <= limit;
     },
 
-    async registerAccount({ anonymousUserId, displayName, email, passwordHash }) {
+    async registerAccount({
+      anonymousUserId,
+      displayName,
+      email,
+      passwordHash,
+      hasCppFoundation,
+      hasAlgorithmFoundation,
+    }) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -206,10 +223,20 @@ export function createDatabase(databaseUrl) {
                     email = $3,
                     password_hash = $4,
                     is_guest = false,
+                    has_cpp_foundation = $5,
+                    has_algorithm_foundation = $6,
+                    learning_profile_set = true,
                     updated_at = now()
               WHERE id = $1 AND is_guest = true
               RETURNING id`,
-            [anonymousUserId, displayName, email, passwordHash],
+            [
+              anonymousUserId,
+              displayName,
+              email,
+              passwordHash,
+              hasCppFoundation,
+              hasAlgorithmFoundation,
+            ],
           );
           userId = updated.rows[0]?.id;
         }
@@ -217,9 +244,20 @@ export function createDatabase(databaseUrl) {
           userId = crypto.randomUUID();
           await client.query(
             `INSERT INTO users
-               (id, display_name, email, password_hash, is_guest)
-             VALUES ($1, $2, $3, $4, false)`,
-            [userId, displayName, email, passwordHash],
+               (
+                 id, display_name, email, password_hash, is_guest,
+                 has_cpp_foundation, has_algorithm_foundation,
+                 learning_profile_set
+               )
+             VALUES ($1, $2, $3, $4, false, $5, $6, true)`,
+            [
+              userId,
+              displayName,
+              email,
+              passwordHash,
+              hasCppFoundation,
+              hasAlgorithmFoundation,
+            ],
           );
         }
 
@@ -323,7 +361,9 @@ export function createDatabase(databaseUrl) {
                   updated_at = now()
             WHERE id = $1
             RETURNING
-              id, display_name, email, email_verified_at, is_guest, role`,
+              id, display_name, email, email_verified_at, is_guest, role,
+              has_cpp_foundation, has_algorithm_foundation,
+              learning_profile_set, web_tutorial_completed_at`,
           [record.rows[0].user_id],
         );
         const session = await createSessionForUser(client, record.rows[0].user_id);
@@ -341,7 +381,8 @@ export function createDatabase(databaseUrl) {
       const result = await pool.query(
         `SELECT
            id, display_name, email, password_hash, email_verified_at,
-           is_guest, role
+           is_guest, role, has_cpp_foundation, has_algorithm_foundation,
+           learning_profile_set, web_tutorial_completed_at
            FROM users
           WHERE lower(email) = $1 AND is_guest = false`,
         [email],
@@ -362,7 +403,9 @@ export function createDatabase(databaseUrl) {
               SET last_login_at = now(), updated_at = now()
             WHERE id = $1
             RETURNING
-              id, display_name, email, email_verified_at, is_guest, role`,
+              id, display_name, email, email_verified_at, is_guest, role,
+              has_cpp_foundation, has_algorithm_foundation,
+              learning_profile_set, web_tutorial_completed_at`,
           [userId],
         );
         const token = await createSessionForUser(client, userId);
@@ -447,7 +490,9 @@ export function createDatabase(databaseUrl) {
               SET password_hash = $2, updated_at = now()
             WHERE id = $1
             RETURNING
-              id, display_name, email, email_verified_at, is_guest, role`,
+              id, display_name, email, email_verified_at, is_guest, role,
+              has_cpp_foundation, has_algorithm_foundation,
+              learning_profile_set, web_tutorial_completed_at`,
           [record.rows[0].user_id, passwordHash],
         );
         await client.query("DELETE FROM sessions WHERE user_id = $1", [
@@ -464,16 +509,72 @@ export function createDatabase(databaseUrl) {
       }
     },
 
-    async updateProfile(userId, displayName) {
+    async updateProfile(
+      userId,
+      { displayName, hasCppFoundation, hasAlgorithmFoundation },
+    ) {
       const result = await pool.query(
         `UPDATE users
-            SET display_name = $2, updated_at = now()
+            SET display_name = $2,
+                has_cpp_foundation = $3,
+                has_algorithm_foundation = $4,
+                learning_profile_set = true,
+                updated_at = now()
           WHERE id = $1
           RETURNING
-            id, display_name, email, email_verified_at, is_guest, role`,
-        [userId, displayName],
+            id, display_name, email, email_verified_at, is_guest, role,
+            has_cpp_foundation, has_algorithm_foundation,
+            learning_profile_set, web_tutorial_completed_at`,
+        [userId, displayName, hasCppFoundation, hasAlgorithmFoundation],
       );
       return mapPlayer(result.rows[0]);
+    },
+
+    async completeWebTutorial(userId) {
+      const result = await pool.query(
+        `UPDATE users
+            SET web_tutorial_completed_at = COALESCE(
+                  web_tutorial_completed_at,
+                  now()
+                ),
+                updated_at = now()
+          WHERE id = $1
+          RETURNING
+            id, display_name, email, email_verified_at, is_guest, role,
+            has_cpp_foundation, has_algorithm_foundation,
+            learning_profile_set, web_tutorial_completed_at`,
+        [userId],
+      );
+      return mapPlayer(result.rows[0]);
+    },
+
+    async listQuestStoryProgress(userId) {
+      const result = await pool.query(
+        `SELECT quest_id, completed_at
+           FROM quest_story_progress
+          WHERE user_id = $1
+          ORDER BY completed_at`,
+        [userId],
+      );
+      return result.rows.map((row) => ({
+        questId: row.quest_id,
+        completedAt: row.completed_at.toISOString(),
+      }));
+    },
+
+    async completeQuestStory(userId, questId) {
+      const result = await pool.query(
+        `INSERT INTO quest_story_progress(user_id, quest_id, completed_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (user_id, quest_id) DO UPDATE SET
+           completed_at = EXCLUDED.completed_at
+         RETURNING quest_id, completed_at`,
+        [userId, questId],
+      );
+      return {
+        questId: result.rows[0].quest_id,
+        completedAt: result.rows[0].completed_at.toISOString(),
+      };
     },
 
     async revokeSession(token) {
@@ -799,6 +900,10 @@ export function createDatabase(databaseUrl) {
            u.email_verified_at,
            u.is_guest,
            u.role,
+           u.has_cpp_foundation,
+           u.has_algorithm_foundation,
+           u.learning_profile_set,
+           u.web_tutorial_completed_at,
            u.created_at,
            u.updated_at,
            u.last_login_at,
@@ -836,6 +941,8 @@ export function createDatabase(databaseUrl) {
       const result = await pool.query(
         `SELECT
            id, display_name, email, email_verified_at, is_guest, role,
+           has_cpp_foundation, has_algorithm_foundation,
+           learning_profile_set, web_tutorial_completed_at,
            created_at, updated_at, last_login_at
          FROM users
          WHERE id = $1`,
@@ -862,7 +969,9 @@ export function createDatabase(databaseUrl) {
                 updated_at = now()
           WHERE id = $1 AND is_guest = false
           RETURNING
-            id, display_name, email, email_verified_at, is_guest, role`,
+            id, display_name, email, email_verified_at, is_guest, role,
+            has_cpp_foundation, has_algorithm_foundation,
+            learning_profile_set, web_tutorial_completed_at`,
         [userId, displayName, emailVerified, role],
       );
       return result.rowCount ? mapPlayer(result.rows[0]) : undefined;
@@ -1152,18 +1261,19 @@ export function createDatabase(databaseUrl) {
       kind,
       title,
       content,
+      contentFormat,
       status,
     }) {
       const result = await pool.query(
         `INSERT INTO editorial_posts
-           (id, quest_id, author_id, kind, title, content, status,
+           (id, quest_id, author_id, kind, title, content, content_format, status,
             moderated_by, moderated_at)
          VALUES
-           ($1, $2, $3::uuid, $4, $5, $6, $7::varchar(16),
-            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN $3::uuid END,
-            CASE WHEN $7::varchar(16) = 'published'::varchar(16) THEN now() END)
+           ($1, $2, $3::uuid, $4, $5, $6, $7::varchar(32), $8::varchar(16),
+            CASE WHEN $8::varchar(16) = 'published'::varchar(16) THEN $3::uuid END,
+            CASE WHEN $8::varchar(16) = 'published'::varchar(16) THEN now() END)
          RETURNING id`,
-        [id, questId, authorId, kind, title, content, status],
+        [id, questId, authorId, kind, title, content, contentFormat, status],
       );
       const posts = await this.listEditorialPosts({
         viewerId: authorId,
@@ -1215,6 +1325,7 @@ function mapEditorialPost(row) {
     kind: row.kind,
     title: row.title,
     content: row.content,
+    contentFormat: row.content_format ?? "plain",
     status: row.status,
     author: {
       id: row.author_id,
@@ -1228,6 +1339,13 @@ function mapEditorialPost(row) {
 }
 
 export function mapPlayer(row) {
+  const hasCppFoundation = Boolean(row.has_cpp_foundation);
+  const hasAlgorithmFoundation = Boolean(row.has_algorithm_foundation);
+  const recommendedQuestId = !hasCppFoundation
+    ? "signal-fire"
+    : hasAlgorithmFoundation
+      ? "knapsack-forge"
+      : "sorting-ruins";
   return {
     id: row.id,
     displayName: row.display_name,
@@ -1235,6 +1353,13 @@ export function mapPlayer(row) {
     emailVerified: Boolean(row.email_verified_at),
     isGuest: row.is_guest,
     role: row.role ?? "player",
+    learningProfile: {
+      hasCppFoundation,
+      hasAlgorithmFoundation,
+      configured: Boolean(row.learning_profile_set),
+    },
+    tutorialCompleted: Boolean(row.web_tutorial_completed_at),
+    recommendedQuestId,
   };
 }
 

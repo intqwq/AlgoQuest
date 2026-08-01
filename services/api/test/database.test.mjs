@@ -130,8 +130,52 @@ test("authenticated player payload retains the database role", () => {
       emailVerified: true,
       isGuest: false,
       role: "owner",
+      learningProfile: {
+        hasCppFoundation: false,
+        hasAlgorithmFoundation: false,
+        configured: false,
+      },
+      tutorialCompleted: false,
+      recommendedQuestId: "signal-fire",
     },
   );
+});
+
+test("learning profile selects a safe curriculum entry point", () => {
+  const cppOnly = mapPlayer({
+    id: "cpp-player",
+    display_name: "CPP",
+    is_guest: false,
+    role: "player",
+    has_cpp_foundation: true,
+    has_algorithm_foundation: false,
+    learning_profile_set: true,
+  });
+  const advanced = mapPlayer({
+    id: "advanced-player",
+    display_name: "ADVANCED",
+    is_guest: false,
+    role: "player",
+    has_cpp_foundation: true,
+    has_algorithm_foundation: true,
+    learning_profile_set: true,
+    web_tutorial_completed_at: new Date(),
+  });
+  assert.equal(cppOnly.recommendedQuestId, "sorting-ruins");
+  assert.equal(advanced.recommendedQuestId, "knapsack-forge");
+  assert.equal(advanced.tutorialCompleted, true);
+});
+
+test("learning migration persists profile, tutorial and per-quest stories", async () => {
+  const migration = await readFile(
+    new URL("../migrations/009_learning_journey.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /has_cpp_foundation boolean NOT NULL DEFAULT false/);
+  assert.match(migration, /has_algorithm_foundation boolean NOT NULL DEFAULT false/);
+  assert.match(migration, /web_tutorial_completed_at timestamptz/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS quest_story_progress/);
+  assert.match(migration, /PRIMARY KEY \(user_id, quest_id\)/);
 });
 
 test("map layout migration stores durable collision-free coordinates", async () => {
@@ -157,6 +201,21 @@ test("editorial migration separates discussions, solutions and moderation state"
   assert.match(migration, /moderated_by uuid REFERENCES users/);
 });
 
+test("editorial rich-text migration preserves legacy posts and records the format", async () => {
+  const migration = await readFile(
+    new URL("../migrations/008_editorial_rich_text.sql", import.meta.url),
+    "utf8",
+  );
+  const database = await readFile(
+    new URL("../src/database.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /content_format varchar\(32\).*DEFAULT 'plain'/);
+  assert.match(migration, /'tiptap-json-v1'/);
+  assert.match(database, /p\.content_format/);
+  assert.match(database, /contentFormat: row\.content_format \?\? "plain"/);
+});
+
 test("discussion migration publishes legacy pending discussions", async () => {
   const migration = await readFile(
     new URL("../migrations/007_publish_pending_discussions.sql", import.meta.url),
@@ -174,6 +233,8 @@ test("editorial routes publish discussions directly and moderate solutions", asy
   );
   assert.match(server, /QUEST_SUBMISSION_REQUIRED/);
   assert.match(server, /QUEST_CLEAR_REQUIRED/);
+  assert.match(server, /validateEditorialContent/);
+  assert.match(server, /contentFormat: editorialContent\.contentFormat/);
   assert.match(server, /body\.kind === "discussion" \|\| moderator \? "published" : "pending"/);
   assert.doesNotMatch(server, /status: moderator \? "published" : "pending"/);
   assert.match(server, /requireAdmin\(player\)[\s\S]*moderateEditorialPost/);

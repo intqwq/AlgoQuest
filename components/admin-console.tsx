@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { EditorialRichText } from "@/components/editorial-rich-text";
 import {
   AdminQuestRecord,
   archiveAdminQuest,
@@ -576,7 +577,11 @@ export function AdminConsole({
                       </strong>
                     </div>
                     <h3>{post.title}</h3>
-                    <p>{post.content}</p>
+                    <EditorialRichText
+                      content={post.content}
+                      contentFormat={post.contentFormat}
+                      className="moderation-card__content"
+                    />
                     <time>{new Date(post.createdAt).toLocaleString()}</time>
                     <div>
                       <button
