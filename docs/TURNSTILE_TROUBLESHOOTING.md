@@ -90,3 +90,23 @@ Error `110200` means the current hostname is not authorized. Error `200500` mean
 
 If a Content Security Policy is added later, allow `https://challenges.cloudflare.com` in both `script-src` and `frame-src`.
 
+## New in-panel status and retry controls
+
+The account dialog now separates two failure layers:
+
+- **Security configuration offline** means `/api/v1/auth/config` could not be
+  loaded after bounded retries. Use **Retry config** after checking API/Gateway
+  health.
+- **Security check error** means the Cloudflare widget loaded far enough to
+  report a client error. The panel displays the exact Turnstile error code and
+  offers **Retry check**.
+
+The script loader fails visibly after 12 seconds instead of waiting forever. It
+removes a failed script instance before retrying. Expired tokens, interactive
+challenge timeouts, unsupported browsers, and script/API failures all clear the
+form token so an account action cannot submit stale verification.
+
+Turnstile still performs its normal automatic retry with an 8-second retry
+interval. The manual button is for persistent errors or networks where the
+automatic attempt cannot recover.
+
