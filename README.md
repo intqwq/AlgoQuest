@@ -191,6 +191,21 @@ npm --prefix judge start
 The Web client uses `/api/v1` by default. When calling the Core API directly on
 port `8787`, use `/v1` paths instead.
 
+## Reliability hardening
+
+- Trusted Judge manifests are JSON-serialized to the disposable container's
+  stdin and retained only in the root supervisor's memory. The single-job
+  `/submission` mount is read-only, fd 0 is sealed to `/dev/null`, and fresh
+  binaries are exported for cache reuse only after the container has stopped.
+- The real Docker regression suite covers `AC`, `CE`, `WA`, `TLE`, `RE`, `MLE`,
+  and `OLE`, verifies one container start per submission, and probes the old
+  manifest path, PID 1 command line/stdin, hidden output fields, and write access.
+- Turnstile Siteverify uses a four-second deadline per attempt, up to three
+  bounded transient retries with one idempotency key, classified machine-readable
+  reasons, and `Retry-After` metadata for temporary outages.
+- GitHub Actions exposes the stable `required-ci` check for pull requests, merge
+  groups, and pushes to `main`. See [CI and branch protection](docs/CI.md).
+
 ## Validation
 
 ```bash
