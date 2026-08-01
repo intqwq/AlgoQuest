@@ -24,3 +24,17 @@ jobs:
         with:
           languages: javascript-typescript,python
       - uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          # This private repository does not currently have GitHub Code Scanning
+          # enabled. Keep running the complete analysis and retain its SARIF until
+          # repository settings allow direct security-events uploads.
+          upload: never
+      - name: Retain CodeQL SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: codeql-results
+          if-no-files-found: error
+          retention-days: 14
