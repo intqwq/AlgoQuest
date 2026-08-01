@@ -13,6 +13,36 @@
   --border: #2c2d2a;
 }
 
+/* Rich OJ authoring, categorized tags, sample diagnostics, and quest sample runs. */
+.oj-run-sample {
+  grid-column: 1 / -1;
+  justify-self: end;
+  margin: 0 16px 16px;
+  border: 1px solid var(--green);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--green-dark);
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  cursor: pointer;
+}
+.oj-run-sample:disabled { opacity: 0.55; cursor: wait; }
+.oj-rich-statement { display: grid; gap: 0.45rem; }
+.oj-rich-statement > span { font-weight: 800; letter-spacing: 0.06em; }
+.oj-tag-categories { display: grid; gap: 0.85rem; margin-top: 0.75rem; }
+.oj-tag-categories > span { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.12em; }
+.oj-tag-categories section { border-left: 2px solid var(--line); padding-left: 0.75rem; }
+.oj-tag-categories h3 { margin: 0 0 0.5rem; font-size: 0.82rem; color: var(--ink); }
+.oj-case-grid details { border: 1px solid var(--ink); background: rgba(0, 0, 0, 0.03); padding: 0.65rem; }
+.oj-case-grid summary { display: grid; grid-template-columns: auto auto 1fr; gap: 0.65rem; cursor: pointer; }
+.oj-case-grid details > div { margin-top: 0.65rem; }
+.oj-case-grid h4 { margin: 0 0 0.3rem; font-size: 0.74rem; letter-spacing: 0.08em; }
+.oj-case-grid pre { max-height: 18rem; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.oj-admin-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 0.8rem; }
+.oj-admin-actions .is-danger { border-color: #b51f36; color: #b51f36; }
+.sample-block { display: grid; gap: 0.65rem; margin-bottom: 1rem; }
+.sample-button--inline { justify-self: end; }
+.quest-rich-statement { margin: 1rem 0; }
+
 * {
   box-sizing: border-box;
 }

@@ -8,11 +8,11 @@ export function createOjRepository(pool) {
         `INSERT INTO oj_problems
            (
              id, author_id, status, title, statement, time_limit_ms,
-             memory_limit_mb, difficulty, tags, tests, std_source
+             statement_format, memory_limit_mb, difficulty, tags, tests, std_source
            )
          VALUES
            ($1::uuid, $2::uuid, 'pending', $3, $4, $5::integer,
-            $6::integer, $7::smallint, $8::text[], $9::jsonb, $10)
+            $6, $7::integer, $8::smallint, $9::text[], $10::jsonb, $11)
          RETURNING *`,
         [
           id,
@@ -20,6 +20,7 @@ export function createOjRepository(pool) {
           problem.title,
           problem.statement,
           problem.timeLimitMs,
+          problem.statementFormat,
           problem.memoryLimitMb,
           problem.difficulty,
           problem.tags,
@@ -31,16 +32,33 @@ export function createOjRepository(pool) {
     },
     
     async updateOjProblemDraft(problemId, authorId, problem) {
+      const pendingRevision = await pool.query(
+        `UPDATE oj_problems
+            SET pending_revision = $3::jsonb,
+                revision_status = 'pending',
+                revision_review_note = '',
+                revision_reviewer_id = NULL,
+                revision_reviewed_at = NULL,
+                updated_at = now()
+          WHERE id = $1::uuid
+            AND author_id = $2::uuid
+            AND status = 'published'
+          RETURNING *, true AS use_pending_revision`,
+        [problemId, authorId, JSON.stringify(problem)],
+      );
+      if (pendingRevision.rowCount) return mapOjProblem(pendingRevision.rows[0]);
+
       const result = await pool.query(
         `UPDATE oj_problems
             SET title = $3,
                 statement = $4,
-                time_limit_ms = $5::integer,
-                memory_limit_mb = $6::integer,
-                difficulty = $7::smallint,
-                tags = $8::text[],
-                tests = $9::jsonb,
-                std_source = $10,
+                statement_format = $5,
+                time_limit_ms = $6::integer,
+                memory_limit_mb = $7::integer,
+                difficulty = $8::smallint,
+                tags = $9::text[],
+                tests = $10::jsonb,
+                std_source = $11,
                 status = 'pending',
                 review_note = '',
                 reviewer_id = NULL,
@@ -55,6 +73,7 @@ export function createOjRepository(pool) {
           authorId,
           problem.title,
           problem.statement,
+          problem.statementFormat,
           problem.timeLimitMs,
           problem.memoryLimitMb,
           problem.difficulty,
@@ -125,7 +144,8 @@ export function createOjRepository(pool) {
     
     async listAuthorOjProblems(authorId) {
       const result = await pool.query(
-        `SELECT p.*, u.display_name AS author_name
+        `SELECT p.*, u.display_name AS author_name,
+                (p.status <> 'archived' AND p.revision_status IS NOT NULL) AS use_pending_revision
            FROM oj_problems p
            JOIN users u ON u.id = p.author_id
           WHERE p.author_id = $1::uuid
@@ -138,10 +158,12 @@ export function createOjRepository(pool) {
     
     async listOjProblemsForModeration(status = "pending") {
       const result = await pool.query(
-        `SELECT p.*, u.display_name AS author_name
+        `SELECT p.*, u.display_name AS author_name,
+                (p.revision_status = $1::varchar(16)) AS use_pending_revision
            FROM oj_problems p
            JOIN users u ON u.id = p.author_id
           WHERE p.status = $1::varchar(16)
+             OR p.revision_status = $1::varchar(16)
           ORDER BY p.created_at ASC
           LIMIT 200`,
         [status],
@@ -150,6 +172,35 @@ export function createOjRepository(pool) {
     },
     
     async moderateOjProblem(problemId, status, reviewerId, reviewNote) {
+      const revision = await pool.query(
+        `UPDATE oj_problems
+            SET title = CASE WHEN $2::varchar(16) = 'published' THEN pending_revision->>'title' ELSE title END,
+                statement = CASE WHEN $2::varchar(16) = 'published' THEN pending_revision->>'statement' ELSE statement END,
+                statement_format = CASE WHEN $2::varchar(16) = 'published' THEN COALESCE(pending_revision->>'statementFormat', 'plain') ELSE statement_format END,
+                time_limit_ms = CASE WHEN $2::varchar(16) = 'published' THEN (pending_revision->>'timeLimitMs')::integer ELSE time_limit_ms END,
+                memory_limit_mb = CASE WHEN $2::varchar(16) = 'published' THEN (pending_revision->>'memoryLimitMb')::integer ELSE memory_limit_mb END,
+                difficulty = CASE WHEN $2::varchar(16) = 'published' THEN (pending_revision->>'difficulty')::smallint ELSE difficulty END,
+                tags = CASE WHEN $2::varchar(16) = 'published' THEN ARRAY(SELECT jsonb_array_elements_text(pending_revision->'tags')) ELSE tags END,
+                tests = CASE WHEN $2::varchar(16) = 'published' THEN pending_revision->'tests' ELSE tests END,
+                std_source = CASE WHEN $2::varchar(16) = 'published' THEN pending_revision->>'stdSource' ELSE std_source END,
+                revision_status = CASE WHEN $2::varchar(16) = 'published' THEN NULL ELSE 'rejected' END,
+                revision_review_note = $4,
+                revision_reviewer_id = $3::uuid,
+                revision_reviewed_at = now(),
+                pending_revision = CASE WHEN $2::varchar(16) = 'published' THEN NULL ELSE pending_revision END,
+                updated_at = now()
+          WHERE id = $1::uuid
+            AND status = 'published'
+            AND revision_status IN ('pending', 'rejected')
+          RETURNING id`,
+        [problemId, status, reviewerId, reviewNote],
+      );
+      if (revision.rowCount) {
+        const listStatus = status === "published" ? "published" : "rejected";
+        const problems = await this.listOjProblemsForModeration(listStatus);
+        return problems.find((problem) => problem.id === problemId);
+      }
+
       const result = await pool.query(
         `UPDATE oj_problems
             SET status = $2::varchar(16),
@@ -176,25 +227,81 @@ export function createOjRepository(pool) {
       const problems = await this.listOjProblemsForModeration(status);
       return problems.find((problem) => problem.id === problemId);
     },
+
+    async adminUpdateOjProblem(problemId, actorId, problem) {
+      const result = await pool.query(
+        `UPDATE oj_problems
+            SET title = $3,
+                statement = $4,
+                statement_format = $5,
+                time_limit_ms = $6::integer,
+                memory_limit_mb = $7::integer,
+                difficulty = $8::smallint,
+                tags = $9::text[],
+                tests = $10::jsonb,
+                std_source = $11,
+                pending_revision = NULL,
+                revision_status = NULL,
+                revision_review_note = '',
+                revision_reviewer_id = NULL,
+                revision_reviewed_at = NULL,
+                reviewer_id = $2::uuid,
+                reviewed_at = now(),
+                updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING *`,
+        [
+          problemId, actorId, problem.title, problem.statement,
+          problem.statementFormat, problem.timeLimitMs, problem.memoryLimitMb,
+          problem.difficulty, problem.tags, JSON.stringify(problem.tests),
+          problem.stdSource,
+        ],
+      );
+      return result.rowCount ? mapOjProblem(result.rows[0]) : undefined;
+    },
+
+    async archiveOjProblem(problemId, actorId) {
+      const result = await pool.query(
+        `UPDATE oj_problems
+            SET status = 'archived', archived_at = now(), reviewer_id = $2::uuid,
+                reviewed_at = now(), updated_at = now()
+          WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING *`,
+        [problemId, actorId],
+      );
+      return result.rowCount ? mapOjProblem(result.rows[0]) : undefined;
+    },
+
+    async deleteOjProblem(problemId) {
+      const result = await pool.query(
+        "DELETE FROM oj_problems WHERE id = $1::uuid RETURNING id",
+        [problemId],
+      );
+      return result.rowCount > 0;
+    },
   };
 }
 
 function mapOjProblem(row) {
+  const revision = row.use_pending_revision && row.pending_revision
+    ? row.pending_revision
+    : undefined;
   return {
     id: row.id,
     publicId: row.public_id === null || row.public_id === undefined
       ? null
       : Number(row.public_id),
-    status: row.status,
-    title: row.title,
-    statement: row.statement ?? "",
-    timeLimitMs: row.time_limit_ms,
-    memoryLimitMb: row.memory_limit_mb,
-    difficulty: row.difficulty,
-    tags: row.tags ?? [],
-    tests: Array.isArray(row.tests) ? row.tests : [],
-    stdSource: row.std_source ?? "",
-    reviewNote: row.review_note ?? "",
+    status: revision ? row.revision_status : row.status,
+    title: revision?.title ?? row.title,
+    statement: revision?.statement ?? row.statement ?? "",
+    statementFormat: revision?.statementFormat ?? row.statement_format ?? "plain",
+    timeLimitMs: revision?.timeLimitMs ?? row.time_limit_ms,
+    memoryLimitMb: revision?.memoryLimitMb ?? row.memory_limit_mb,
+    difficulty: revision?.difficulty ?? row.difficulty,
+    tags: revision?.tags ?? row.tags ?? [],
+    tests: revision?.tests ?? (Array.isArray(row.tests) ? row.tests : []),
+    stdSource: revision?.stdSource ?? row.std_source ?? "",
+    reviewNote: revision ? row.revision_review_note ?? "" : row.review_note ?? "",
     author: {
       id: row.author_id,
       displayName: row.author_name ?? "PLAYER",
@@ -203,8 +310,9 @@ function mapOjProblem(row) {
     acceptedCount: row.accepted_count ?? 0,
     createdAt: row.created_at?.toISOString?.() ?? row.created_at,
     updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at,
-    reviewedAt: row.reviewed_at?.toISOString?.() ?? row.reviewed_at ?? null,
+    reviewedAt: revision
+      ? row.revision_reviewed_at?.toISOString?.() ?? row.revision_reviewed_at ?? null
+      : row.reviewed_at?.toISOString?.() ?? row.reviewed_at ?? null,
     publishedAt: row.published_at?.toISOString?.() ?? row.published_at ?? null,
   };
 }
-

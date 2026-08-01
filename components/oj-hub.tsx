@@ -3,7 +3,10 @@
 import Editor from "@monaco-editor/react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  adminUpdateOjProblem,
+  archiveOjProblem,
   AuthApiError,
+  deleteOjProblem,
   JudgeSubmissionState,
   loadJudgeSubmission,
   loadMyOjProblems,
@@ -17,12 +20,19 @@ import {
   OjProblemInput,
   OjProblemStatus,
   OjProblemSummary,
+  OjTagCategory,
   OjTestCase,
   Player,
   resubmitOjProblem,
   submitOjProblem,
   submitOjSolution,
 } from "@/lib/api-client";
+import {
+  EditorialComposer,
+  EditorialRichText,
+  emptyEditorialDocument,
+  richEditorialContentFormat,
+} from "@/components/editorial-rich-text";
 import type { Locale } from "@/lib/i18n";
 
 type OjView = "index" | "problem" | "submit" | "mine" | "review";
@@ -44,6 +54,9 @@ const copy = {
     publicId: "PUBLIC ID", awaitingId: "Assigned after approval", reviewNote: "Review note", approve: "APPROVE & ASSIGN ID", reject: "REJECT",
     emptyMine: "You have not submitted a problem yet.", emptyReview: "The review queue is clear.", edit: "EDIT & RESUBMIT",
     hidden: "Hidden judge data", stdSource: "Standard solution", testCount: "tests", loadError: "OJ service is temporarily unavailable.",
+    runSample: "RUN THIS SAMPLE", received: "ACTUAL OUTPUT", expected: "EXPECTED OUTPUT", stderr: "RUNTIME DIAGNOSTICS",
+    modify: "MODIFY", archive: "ARCHIVE", restore: "RESTORE", delete: "DELETE PERMANENTLY", archived: "ARCHIVED",
+    confirmDelete: "Permanently delete this problem and its drafts? This cannot be undone.", tagCategories: "TAG CATEGORIES",
   },
   "zh-CN": {
     eyebrow: "社区在线评测", title: "OJ 题库", subtitle: "检索与挑战题目，也可以提交你的原创算法题。",
@@ -61,6 +74,9 @@ const copy = {
     publicId: "公开题号", awaitingId: "审核通过后分配", reviewNote: "审核意见", approve: "通过并分配题号", reject: "驳回",
     emptyMine: "你还没有投稿题目。", emptyReview: "当前没有待审核题目。", edit: "修改并重新提交",
     hidden: "仅审核与判题服务可见", stdSource: "标准代码", testCount: "个测试点", loadError: "OJ 服务暂时不可用。",
+    runSample: "运行此样例", received: "实际输出", expected: "期望输出", stderr: "运行时诊断",
+    modify: "管理员修改", archive: "归档", restore: "恢复", delete: "永久删除", archived: "已归档",
+    confirmDelete: "确定永久删除这道题及其修订吗？此操作不可撤销。", tagCategories: "标签分类",
   },
   ja: {
     eyebrow: "コミュニティ・オンラインジャッジ", title: "OJ 問題庫", subtitle: "問題を検索して解き、オリジナル問題も投稿できます。",
@@ -78,6 +94,9 @@ const copy = {
     publicId: "公開番号", awaitingId: "承認時に割り当て", reviewNote: "審査コメント", approve: "承認して番号を付与", reject: "却下",
     emptyMine: "投稿した問題はありません。", emptyReview: "審査待ちはありません。", edit: "修正して再提出",
     hidden: "審査・ジャッジ専用", stdSource: "標準解答", testCount: "テスト", loadError: "OJ サービスを利用できません。",
+    runSample: "このサンプルを実行", received: "実際の出力", expected: "期待される出力", stderr: "実行時診断",
+    modify: "管理者編集", archive: "アーカイブ", restore: "復元", delete: "完全に削除", archived: "アーカイブ済み",
+    confirmDelete: "この問題と改訂を完全に削除しますか？元に戻せません。", tagCategories: "タグ分類",
   },
 } as const;
 
@@ -127,6 +146,7 @@ export function OjHub({
   const canManage = player?.role === "admin" || player?.role === "owner";
   const [view, setView] = useState<OjView>("index");
   const [tags, setTags] = useState<string[]>([]);
+  const [tagCategories, setTagCategories] = useState<OjTagCategory[]>([]);
   const [problems, setProblems] = useState<OjProblemSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -146,9 +166,14 @@ export function OjHub({
   const [judging, setJudging] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const [editingId, setEditingId] = useState<string>();
+  const [adminEditing, setAdminEditing] = useState(false);
+  const [statementTextLength, setStatementTextLength] = useState(0);
+  const [statementTooLarge, setStatementTooLarge] = useState(false);
+  const [activeSample, setActiveSample] = useState<number>();
   const [form, setForm] = useState<OjProblemInput>({
     title: "",
-    statement: "",
+    statement: emptyEditorialDocument,
+    statementFormat: richEditorialContentFormat,
     timeLimitMs: 1000,
     memoryLimitMb: 256,
     difficulty: 3,
@@ -178,7 +203,9 @@ export function OjHub({
   }, [c.loadError, filters, page]);
 
   useEffect(() => {
-    void loadOjTags().then(setTags).catch(() => setTags([]));
+    void loadOjTags()
+      .then((result) => { setTags(result.tags); setTagCategories(result.categories); })
+      .catch(() => { setTags([]); setTagCategories([]); });
   }, []);
 
   useEffect(() => {
@@ -217,6 +244,16 @@ export function OjHub({
     const normalized = tagQuery.trim().toLowerCase();
     return tags.filter((item) => !normalized || item.toLowerCase().includes(normalized)).slice(0, 48);
   }, [tagQuery, tags]);
+
+  const visibleTagCategories = useMemo(() => {
+    const available = new Set(visibleTags);
+    if (!tagCategories.length) {
+      return [{ id: "all", label: { en: "Algorithms", "zh-CN": "算法", ja: "アルゴリズム" }, tags: visibleTags }];
+    }
+    return tagCategories
+      .map((category) => ({ ...category, tags: category.tags.filter((item) => available.has(item)) }))
+      .filter((category) => category.tags.length);
+  }, [tagCategories, visibleTags]);
 
   const openProblem = async (publicId: number) => {
     setLoading(true);
@@ -258,17 +295,23 @@ export function OjHub({
 
   const resetForm = () => {
     setEditingId(undefined);
+    setAdminEditing(false);
+    setStatementTextLength(0);
+    setStatementTooLarge(false);
     setForm({
-      title: "", statement: "", timeLimitMs: 1000, memoryLimitMb: 256,
+      title: "", statement: emptyEditorialDocument, statementFormat: richEditorialContentFormat,
+      timeLimitMs: 1000, memoryLimitMb: 256,
       difficulty: 3, tags: [], tests: [blankTest(true), blankTest(false)], stdSource: defaultCode,
     });
   };
 
-  const editDraft = (problem: OjProblemDraft) => {
+  const editDraft = (problem: OjProblemDraft, asAdmin = false) => {
     setEditingId(problem.id);
+    setAdminEditing(asAdmin);
     setForm({
       title: problem.title,
       statement: problem.statement,
+      statementFormat: problem.statementFormat ?? "plain",
       timeLimitMs: problem.timeLimitMs,
       memoryLimitMb: problem.memoryLimitMb,
       difficulty: problem.difficulty,
@@ -284,7 +327,7 @@ export function OjHub({
   const sendProblem = async (event: FormEvent) => {
     event.preventDefault();
     if (
-      form.title.trim().length < 3 || form.statement.trim().length < 20 ||
+      form.title.trim().length < 3 || statementTextLength < 20 || statementTooLarge ||
       !form.stdSource.trim() || form.tags.length < 1 || form.tags.length > 12 ||
       !form.tests.length || !form.tests.some((item) => item.sample)
     ) {
@@ -293,11 +336,13 @@ export function OjHub({
     }
     setLoading(true);
     try {
-      if (editingId) await resubmitOjProblem(editingId, form);
+      const wasAdminEditing = Boolean(editingId && adminEditing);
+      if (wasAdminEditing) await adminUpdateOjProblem(editingId!, form);
+      else if (editingId) await resubmitOjProblem(editingId, form);
       else await submitOjProblem(form);
       resetForm();
       setMessage(c.submitted);
-      setView("mine");
+      setView(wasAdminEditing ? "review" : "mine");
     } catch (error) {
       setMessage(errorText(error, c.loadError));
     } finally {
@@ -305,12 +350,17 @@ export function OjHub({
     }
   };
 
-  const judgeSolution = async () => {
+  const judgeSolution = async (sampleIndex?: number) => {
     if (!selected || judging) return;
     if (!canSubmit) { onLogin(); return; }
     setJudging(true);
+    setActiveSample(sampleIndex);
     try {
-      let state = await submitOjSolution(selected.publicId, code);
+      let state = await submitOjSolution(
+        selected.publicId,
+        code,
+        sampleIndex === undefined ? { mode: "submit" } : { mode: "sample", sampleIndex },
+      );
       setJudge(state);
       setMessage(c.queued);
       let polls = 0;
@@ -324,6 +374,7 @@ export function OjHub({
       setMessage(errorText(error, c.loadError));
     } finally {
       setJudging(false);
+      setActiveSample(undefined);
     }
   };
 
@@ -335,6 +386,36 @@ export function OjHub({
       setReviewQueue((current) => current.filter((item) => item.id !== problemId));
       setMessage(status === "published" ? c.published : c.rejected);
       if (status === "published") void refreshIndex();
+    } catch (error) {
+      setMessage(errorText(error, c.loadError));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const archiveProblem = async (problemId: string) => {
+    setLoading(true);
+    try {
+      await archiveOjProblem(problemId);
+      setReviewQueue((current) => current.filter((item) => item.id !== problemId));
+      setMessage(c.archived);
+      void refreshIndex();
+    } catch (error) {
+      setMessage(errorText(error, c.loadError));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeProblem = async (problemId: string) => {
+    if (!window.confirm(c.confirmDelete)) return;
+    setLoading(true);
+    try {
+      await deleteOjProblem(problemId);
+      setReviewQueue((current) => current.filter((item) => item.id !== problemId));
+      setMine((current) => current.filter((item) => item.id !== problemId));
+      setMessage(c.delete);
+      void refreshIndex();
     } catch (error) {
       setMessage(errorText(error, c.loadError));
     } finally {
@@ -397,40 +478,57 @@ export function OjHub({
           <article className="oj-statement">
             <header><div><span>OJ #{selected.publicId}</span><h2>{selected.title}</h2></div><Difficulty value={selected.difficulty} locale={locale} /></header>
             <div className="oj-problem-meta"><span>{c.author}: <strong>{selected.author.displayName}</strong></span><span>{c.limits}: <strong>{selected.timeLimitMs} ms / {selected.memoryLimitMb} MB</strong></span><span>{c.acceptance}: <strong>{acceptance(selected)}</strong></span></div>
-            <div className="oj-statement-text">{selected.statement}</div>
+            <EditorialRichText
+              content={selected.statement}
+              contentFormat={selected.statementFormat ?? "plain"}
+              className="oj-statement-text"
+            />
             <div className="oj-statement-tags">{selected.tags.map((item) => <code key={item}>{item}</code>)}</div>
             <h3>{c.samples}</h3>
-            {selected.samples.map((sample, index) => <div className="oj-sample" key={`${sample.input}-${index}`}><div><span>{c.input} #{index + 1}</span><pre>{sample.input}</pre></div><div><span>{c.output} #{index + 1}</span><pre>{sample.output}</pre></div></div>)}
+            {selected.samples.map((sample, index) => <div className="oj-sample" key={sample.id ?? `${sample.input}-${index}`}><div><span>{c.input} #{index + 1}</span><pre>{sample.input}</pre></div><div><span>{c.output} #{index + 1}</span><pre>{sample.output}</pre></div><button type="button" className="oj-run-sample" disabled={judging} onClick={() => void judgeSolution(index)}>{judging && activeSample === index ? `[ ${judge?.status ?? "QUEUED"} ]` : `[ ${c.runSample} #${index + 1} ]`}</button></div>)}
           </article>
           <section className="oj-code-panel">
             <div className="oj-code-panel__bar"><span>● main.cpp</span><span>GNU++14{" // "}UTF-8</span></div>
             <Editor height="480px" language="cpp" theme="vs-dark" value={code} onChange={(value) => setCode(value ?? "")} options={{ automaticLayout: true, fontSize: 14, minimap: { enabled: true }, tabSize: 4, insertSpaces: true, bracketPairColorization: { enabled: true }, scrollBeyondLastLine: false }} />
-            <button className="oj-submit-code" disabled={judging} onClick={() => void judgeSolution()}>{canSubmit ? (judging ? `[ ${judge?.status ?? "QUEUED"} ]` : `> ${c.submit}_`) : `[ ${c.login} ]`}</button>
+            <button className="oj-submit-code" disabled={judging} onClick={() => void judgeSolution()}>{canSubmit ? (judging && activeSample === undefined ? `[ ${judge?.status ?? "QUEUED"} ]` : `> ${c.submit}_`) : `[ ${c.login} ]`}</button>
           </section>
-          {judge && <section className={`oj-result oj-result--${judge.verdict === "AC" ? "ac" : "other"}`}><header><span>{c.status}</span><strong>{judge.verdict ?? judge.status}</strong><span>{judge.score ?? 0}/100</span></header>{judge.compilerOutput && <div><h3>{c.compiler}</h3><pre>{judge.compilerOutput}</pre></div>}<div><h3>{c.cases}</h3><div className="oj-case-grid">{judge.cases.map((item) => <span key={item.id}><b>#{item.id}</b><em>{item.verdict}</em><small>{item.timeMs ?? 0} ms / {item.memoryKb ?? 0} KB</small></span>)}</div></div></section>}
+          {judge && <section className={`oj-result oj-result--${judge.verdict === "AC" ? "ac" : "other"}`}><header><span>{c.status}</span><strong>{judge.verdict ?? judge.status}</strong><span>{judge.score ?? 0}/100</span></header>{judge.compilerOutput && <div><h3>{c.compiler}</h3><pre>{judge.compilerOutput}</pre></div>}{judge.error && <div><h3>{c.stderr}</h3><pre>{judge.error}</pre></div>}<div><h3>{c.cases}</h3><div className="oj-case-grid">{judge.cases.map((item) => <details key={item.id} open={judge.cases.length === 1 && item.verdict !== "AC"}><summary><b>#{item.id}</b><em>{item.verdict}</em><small>{item.timeMs ?? 0} ms / {item.memoryKb ?? 0} KB</small></summary>{item.input !== undefined && <div><h4>{c.input}</h4><pre>{item.input}</pre></div>}{item.expected !== undefined && <div><h4>{c.expected}</h4><pre>{item.expected}</pre></div>}{item.received !== undefined && <div><h4>{c.received}</h4><pre>{item.received}</pre></div>}{item.stderr && <div><h4>{c.stderr}{item.exitCode !== undefined ? ` // EXIT ${item.exitCode}` : ""}{item.signal ? ` // SIGNAL ${item.signal}` : ""}</h4><pre>{item.stderr}</pre></div>}</details>)}</div></div></section>}
         </div>
       )}
 
       {view === "submit" && canSubmit && (
         <form className="oj-authoring" onSubmit={sendProblem}>
-          <header><div><p className="eyebrow">PROBLEM FORGE</p><h2>{editingId ? c.updateReview : c.submitProblem}</h2></div><span>{c.hidden}</span></header>
+          <header><div><p className="eyebrow">PROBLEM FORGE</p><h2>{adminEditing ? c.modify : editingId ? c.updateReview : c.submitProblem}</h2></div><span>{c.hidden}</span></header>
           <div className="oj-form-grid">
             <label className="oj-wide"><span>{c.problemTitle}</span><input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
             <label><span>{c.time}</span><input type="number" min={100} max={10000} step={100} value={form.timeLimitMs} onChange={(event) => setForm({ ...form, timeLimitMs: Number(event.target.value) })} /></label>
             <label><span>{c.memory}</span><input type="number" min={16} max={512} step={16} value={form.memoryLimitMb} onChange={(event) => setForm({ ...form, memoryLimitMb: Number(event.target.value) })} /></label>
             <label><span>{c.difficulty}</span><select value={form.difficulty} onChange={(event) => setForm({ ...form, difficulty: Number(event.target.value) })}>{difficultyNames[locale].map((name, index) => <option value={index + 1} key={name}>{index + 1}{" // "}{name}</option>)}</select></label>
-            <label className="oj-wide"><span>{c.statement}</span><textarea required rows={16} maxLength={100 * 1024} value={form.statement} onChange={(event) => setForm({ ...form, statement: event.target.value })} /></label>
+            <div className="oj-wide oj-rich-statement"><span>{c.statement}</span><EditorialComposer
+              key={editingId ?? "new-oj-problem"}
+              locale={locale}
+              disabled={loading}
+              initialContent={form.statement}
+              contentFormat={form.statementFormat}
+              documentKey={editingId ?? "new-oj-problem"}
+              placeholder={c.statement}
+              onChange={(statement, count, tooLarge) => {
+                setStatementTextLength(count);
+                setStatementTooLarge(tooLarge);
+                setForm((current) => ({ ...current, statement, statementFormat: richEditorialContentFormat }));
+              }}
+            /></div>
           </div>
-          <section className="oj-tag-picker"><div><strong>{c.chooseTags}</strong><span>{form.tags.length}/12</span></div><input value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder={c.tagSearch} /><div className="oj-selected-tags">{form.tags.map((item) => <button type="button" key={item} onClick={() => toggleTag(item)}>{item} ×</button>)}</div><div className="oj-tag-options">{visibleTags.map((item) => <button type="button" className={form.tags.includes(item) ? "is-selected" : ""} key={item} onClick={() => toggleTag(item)}>{item}</button>)}</div></section>
+          <section className="oj-tag-picker"><div><strong>{c.chooseTags}</strong><span>{form.tags.length}/12</span></div><input value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder={c.tagSearch} /><div className="oj-selected-tags">{form.tags.map((item) => <button type="button" key={item} onClick={() => toggleTag(item)}>{item} ×</button>)}</div><div className="oj-tag-categories"><span>{c.tagCategories}</span>{visibleTagCategories.map((category) => <section key={category.id}><h3>{category.label[locale]}</h3><div className="oj-tag-options">{category.tags.map((item) => <button type="button" className={form.tags.includes(item) ? "is-selected" : ""} key={item} onClick={() => toggleTag(item)}>{item}</button>)}</div></section>)}</div></section>
           <section className="oj-test-editor"><header><div><strong>{c.tests}</strong><span>{form.tests.length}/50 {c.testCount}</span></div><button type="button" disabled={form.tests.length >= 50} onClick={() => setForm({ ...form, tests: [...form.tests, blankTest()] })}>+ {c.addCase}</button></header>{form.tests.map((item, index) => <article key={index}><div className="oj-test-number"><strong>#{String(index + 1).padStart(2, "0")}</strong><label><input type="checkbox" checked={item.sample} onChange={(event) => updateTest(index, { sample: event.target.checked })} /> {c.sample}</label><button type="button" disabled={form.tests.length <= 1} onClick={() => setForm({ ...form, tests: form.tests.filter((_, itemIndex) => itemIndex !== index) })}>{c.remove}</button></div><label><span>{c.input}</span><textarea value={item.input} onChange={(event) => updateTest(index, { input: event.target.value })} /></label><label><span>{c.output}</span><textarea value={item.expected} onChange={(event) => updateTest(index, { expected: event.target.value })} /></label></article>)}</section>
           <label className="oj-std"><span>{c.std}</span><textarea required rows={18} maxLength={64 * 1024} value={form.stdSource} onChange={(event) => setForm({ ...form, stdSource: event.target.value })} /></label>
-          <p className="oj-authoring-note">{c.required}</p><button className="primary-button" disabled={loading} type="submit">&gt; {editingId ? c.updateReview : c.sendReview}_</button>
+          <p className="oj-authoring-note">{c.required}</p><button className="primary-button" disabled={loading || statementTooLarge} type="submit">&gt; {adminEditing ? c.modify : editingId ? c.updateReview : c.sendReview}_</button>
         </form>
       )}
 
-      {view === "mine" && canSubmit && <div className="oj-private-list"><header><p className="eyebrow">AUTHOR CONSOLE</p><h2>{c.mine}</h2></header>{!loading && !mine.length && <div className="oj-empty">{c.emptyMine}</div>}{mine.map((problem) => <article key={problem.id}><div><span className={`oj-status oj-status--${problem.status}`}>{c[problem.status]}</span><h3>{problem.title}</h3><p>{problem.publicId ? `${c.publicId}: #${problem.publicId}` : c.awaitingId}</p>{problem.reviewNote && <blockquote><strong>{c.reviewNote}</strong>{problem.reviewNote}</blockquote>}</div><div className="oj-private-actions"><span>{new Date(problem.updatedAt).toLocaleString()}</span>{problem.status !== "published" && <button onClick={() => editDraft(problem)}>[ {c.edit} ]</button>}{problem.publicId && <button onClick={() => void openProblem(problem.publicId!)}>[ #{problem.publicId} ]</button>}</div></article>)}</div>}
+      {view === "mine" && canSubmit && <div className="oj-private-list"><header><p className="eyebrow">AUTHOR CONSOLE</p><h2>{c.mine}</h2></header>{!loading && !mine.length && <div className="oj-empty">{c.emptyMine}</div>}{mine.map((problem) => <article key={problem.id}><div><span className={`oj-status oj-status--${problem.status}`}>{c[problem.status]}</span><h3>{problem.title}</h3><p>{problem.publicId ? `${c.publicId}: #${problem.publicId}` : c.awaitingId}</p>{problem.reviewNote && <blockquote><strong>{c.reviewNote}</strong>{problem.reviewNote}</blockquote>}</div><div className="oj-private-actions"><span>{new Date(problem.updatedAt).toLocaleString()}</span>{problem.status !== "archived" && <button onClick={() => editDraft(problem)}>[ {c.edit} ]</button>}{problem.publicId && <button onClick={() => void openProblem(problem.publicId!)}>[ #{problem.publicId} ]</button>}</div></article>)}</div>}
 
-      {view === "review" && canManage && <div className="oj-review"><header><div><p className="eyebrow">MODERATION DECK</p><h2>{c.review}</h2></div><select value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value as OjProblemStatus)}><option value="pending">{c.pending}</option><option value="published">{c.published}</option><option value="rejected">{c.rejected}</option></select></header>{!loading && !reviewQueue.length && <div className="oj-empty">{c.emptyReview}</div>}{reviewQueue.map((problem) => <article key={problem.id}><header><div><span>{problem.author.displayName}{" // "}{new Date(problem.createdAt).toLocaleString()}</span><h3>{problem.title}</h3></div><Difficulty value={problem.difficulty} locale={locale} /></header><div className="oj-review-meta"><span>{problem.timeLimitMs} ms</span><span>{problem.memoryLimitMb} MB</span><span>{problem.tests.length} {c.testCount}</span>{problem.tags.map((item) => <code key={item}>{item}</code>)}</div><div className="oj-review-statement">{problem.statement}</div><details><summary>{c.tests}{" // "}{c.hidden}</summary>{problem.tests.map((item, index) => <div className="oj-review-test" key={index}><strong>#{index + 1}{item.sample ? " // SAMPLE" : ""}</strong><pre>{item.input}</pre><pre>{item.expected}</pre></div>)}</details><details><summary>{c.stdSource}{" // "}GNU++14</summary><pre className="oj-review-code">{problem.stdSource}</pre></details>{reviewStatus === "pending" && <div className="oj-review-actions"><textarea placeholder={c.reviewNote} value={reviewNotes[problem.id] ?? ""} onChange={(event) => setReviewNotes((current) => ({ ...current, [problem.id]: event.target.value }))} /><button className="is-approve" disabled={loading} onClick={() => void reviewProblem(problem.id, "published")}>{c.approve}</button><button className="is-reject" disabled={loading} onClick={() => void reviewProblem(problem.id, "rejected")}>{c.reject}</button></div>}</article>)}</div>}
+      {view === "review" && canManage && <div className="oj-review"><header><div><p className="eyebrow">MODERATION DECK</p><h2>{c.review}</h2></div><select value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value as OjProblemStatus)}><option value="pending">{c.pending}</option><option value="published">{c.published}</option><option value="rejected">{c.rejected}</option><option value="archived">{c.archived}</option></select></header>{!loading && !reviewQueue.length && <div className="oj-empty">{c.emptyReview}</div>}{reviewQueue.map((problem) => <article key={problem.id}><header><div><span>{problem.author.displayName}{" // "}{new Date(problem.createdAt).toLocaleString()}</span><h3>{problem.title}</h3></div><Difficulty value={problem.difficulty} locale={locale} /></header><div className="oj-review-meta"><span>{problem.timeLimitMs} ms</span><span>{problem.memoryLimitMb} MB</span><span>{problem.tests.length} {c.testCount}</span>{problem.tags.map((item) => <code key={item}>{item}</code>)}</div><EditorialRichText content={problem.statement} contentFormat={problem.statementFormat ?? "plain"} className="oj-review-statement" /><details><summary>{c.tests}{" // "}{c.hidden}</summary>{problem.tests.map((item, index) => <div className="oj-review-test" key={index}><strong>#{index + 1}{item.sample ? " // SAMPLE" : ""}</strong><pre>{item.input}</pre><pre>{item.expected}</pre></div>)}</details><details><summary>{c.stdSource}{" // "}GNU++14</summary><pre className="oj-review-code">{problem.stdSource}</pre></details>{reviewStatus === "pending" && <div className="oj-review-actions"><textarea placeholder={c.reviewNote} value={reviewNotes[problem.id] ?? ""} onChange={(event) => setReviewNotes((current) => ({ ...current, [problem.id]: event.target.value }))} /><button className="is-approve" disabled={loading} onClick={() => void reviewProblem(problem.id, "published")}>{c.approve}</button><button className="is-reject" disabled={loading} onClick={() => void reviewProblem(problem.id, "rejected")}>{c.reject}</button></div>}<div className="oj-admin-actions"><button type="button" onClick={() => editDraft(problem, true)}>[ {c.modify} ]</button>{problem.status !== "archived" && <button type="button" onClick={() => void archiveProblem(problem.id)}>[ {c.archive} ]</button>}<button type="button" className="is-danger" onClick={() => void removeProblem(problem.id)}>[ {c.delete} ]</button></div></article>)}</div>}
     </section>
   );
 }

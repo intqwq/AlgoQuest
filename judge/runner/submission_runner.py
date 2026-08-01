@@ -218,7 +218,7 @@ def run_case(test, manifest):
     # it is not the process's actual peak memory and can hide regressions.
     memory_kb = raw_memory_kb
     stdout = clamp_text(stdout_path)
-    stderr = clamp_text(stderr_path, 4096)
+    stderr = clamp_text(stderr_path)
     output_exceeded = (
         stdout_path.stat().st_size >= MAX_OUTPUT_BYTES
         or stderr_path.stat().st_size >= MAX_OUTPUT_BYTES
@@ -247,7 +247,16 @@ def run_case(test, manifest):
         "timeMs": time_ms,
         "memoryKb": memory_kb,
     }
-    if verdict == "RE":
+    if manifest.get("diagnostics") is True:
+        result["input"] = test["input"]
+        result["expected"] = test["expected"]
+        result["received"] = stdout
+        result["exitCode"] = process.returncode if process.returncode >= 0 else 128 - process.returncode
+        if process.returncode < 0:
+            result["signal"] = -process.returncode
+        if stderr:
+            result["stderr"] = stderr
+    elif verdict == "RE":
         result["stderr"] = stderr
     return result
 

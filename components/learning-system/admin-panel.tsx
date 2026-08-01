@@ -1,18 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  EditorialComposer,
+  emptyEditorialDocument,
+  richEditorialContentFormat,
+} from "@/components/editorial-rich-text";
+import type { EditorialContentFormat } from "@/lib/api-client";
+import type { Locale } from "@/lib/i18n";
 import { apiJson, parseJson, pretty } from "./api";
 import type { CodexEntry, QuestDraft, QuestVersion, UnlockRule } from "./types";
 import styles from "../learning-system.module.css";
 
 type AdminTab = "drafts" | "rules" | "codex";
 
+const richDocument = (text: string) => JSON.stringify({
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+});
+
 const defaultPublic = (id = "custom-quest") => ({
   id, index: "++", title: "Custom Quest", subtitle: "Administrator draft",
   difficulty: 2, xp: 200, status: "locked", prerequisites: [], chapter: "CUSTOM / LAB",
   gridArea: id, mapPosition: { x: 50, y: 50 }, description: "Describe the mission.",
   skills: ["implementation"], sortOrder: 5000,
-  problem: { story: ["Write the story."], guidance: ["Explain the invariant."], input: "Input.", constraints: "Constraints.", output: "Output.", sampleInput: "1", sampleOutput: "1", hint: "Hint.", hintMarker: "// TODO", hintCode: "", starterCode: "#include <bits/stdc++.h>\nusing namespace std;\nint main() { return 0; }", testCaseCount: 3, passScore: 100, timeLimitSeconds: 1, memoryLimitMb: 64 },
+  problem: { story: ["Write the story."], guidance: ["Explain the invariant."], input: "Input.", constraints: "Constraints.", output: "Output.", richStatement: richDocument("Describe the complete mission, input, output, constraints, and examples."), statementFormat: richEditorialContentFormat, sampleInput: "1", sampleOutput: "1", hint: "Hint.", richHint: richDocument("Add a useful hint without revealing the whole solution."), hintFormat: richEditorialContentFormat, hintMarker: "// TODO", hintCode: "", starterCode: "#include <bits/stdc++.h>\nusing namespace std;\nint main() { return 0; }", testCaseCount: 3, passScore: 100, timeLimitSeconds: 1, memoryLimitMb: 64 },
 });
 const defaultJudge = () => ({ language: "cpp14", timeLimitMs: 1000, memoryLimitMb: 64, compileLimitMs: 15000, passScore: 100, tests: [{ input: "1\n", expected: "1\n" }, { input: "2\n", expected: "2\n" }, { input: "3\n", expected: "3\n" }] });
 
@@ -36,14 +48,47 @@ function DraftsAdmin() {
   const [versions, setVersions] = useState<QuestVersion[]>([]);
   const [preview, setPreview] = useState<Record<string, unknown>>();
   const [message, setMessage] = useState("");
+  const [locale] = useState<Locale>(() => {
+    if (typeof navigator === "undefined") return "en";
+    const language = navigator.language.toLowerCase();
+    return language.startsWith("zh") ? "zh-CN" : language.startsWith("ja") ? "ja" : "en";
+  });
+  const [richStatement, setRichStatement] = useState(() => defaultPublic().problem.richStatement);
+  const [statementFormat, setStatementFormat] = useState<EditorialContentFormat>(richEditorialContentFormat);
+  const [richHint, setRichHint] = useState(() => defaultPublic().problem.richHint);
+  const [hintFormat, setHintFormat] = useState<EditorialContentFormat>(richEditorialContentFormat);
+  const [statementTooLarge, setStatementTooLarge] = useState(false);
+  const [hintTooLarge, setHintTooLarge] = useState(false);
   const load = useCallback(async () => setItems((await apiJson<{ drafts: QuestDraft[] }>("/admin/quest-drafts")).drafts), []);
   useEffect(() => { queueMicrotask(() => void load()); }, [load]);
   const choose = (item: QuestDraft) => {
     setSelected(item.id); setQuestId(item.questId); setTitle(item.title);
     setPublicJson(pretty(item.publicDefinition)); setJudgeJson(pretty(item.judgeDefinition)); setPreview(undefined);
+    const problem = (item.publicDefinition.problem ?? {}) as Record<string, unknown>;
+    const legacyStatement = [
+      ...(Array.isArray(problem.story) ? problem.story : []),
+      problem.input, problem.constraints, problem.output,
+    ].filter((value): value is string => typeof value === "string").join("\n\n");
+    setRichStatement(typeof problem.richStatement === "string" ? problem.richStatement : legacyStatement || emptyEditorialDocument);
+    setStatementFormat(problem.statementFormat === richEditorialContentFormat ? richEditorialContentFormat : "plain");
+    setRichHint(typeof problem.richHint === "string" ? problem.richHint : typeof problem.hint === "string" ? problem.hint : emptyEditorialDocument);
+    setHintFormat(problem.hintFormat === richEditorialContentFormat ? richEditorialContentFormat : "plain");
     void apiJson<{ versions: QuestVersion[] }>(`/admin/quests/${item.questId}/versions`).then((body) => setVersions(body.versions));
   };
-  const payload = () => ({ questId, title, publicDefinition: parseJson(publicJson, "PUBLIC_DEFINITION"), judgeDefinition: parseJson(judgeJson, "JUDGE_DEFINITION") });
+  const payload = () => {
+    const publicDefinition = parseJson(publicJson, "PUBLIC_DEFINITION") as Record<string, unknown>;
+    const problem = publicDefinition.problem && typeof publicDefinition.problem === "object"
+      ? publicDefinition.problem as Record<string, unknown>
+      : {};
+    publicDefinition.problem = {
+      ...problem,
+      richStatement,
+      statementFormat,
+      richHint,
+      hintFormat,
+    };
+    return { questId, title, publicDefinition, judgeDefinition: parseJson(judgeJson, "JUDGE_DEFINITION") };
+  };
   const save = async () => {
     try {
       const body = await apiJson<{ draft: QuestDraft }>(selected ? `/admin/quest-drafts/${selected}` : "/admin/quest-drafts", { method: selected ? "PUT" : "POST", body: JSON.stringify(payload()) });
@@ -59,14 +104,32 @@ function DraftsAdmin() {
     } catch (error) { setMessage(error instanceof Error ? error.message : `${action.toUpperCase()}_FAILED`); }
   };
   return <div className={styles.adminGrid}>
-    <aside className={styles.card}><div className={styles.rowBetween}><strong>DRAFTS</strong><button onClick={() => { setSelected(undefined); setQuestId("custom-quest"); setTitle("Custom Quest"); setPublicJson(pretty(defaultPublic())); setJudgeJson(pretty(defaultJudge())); }}>NEW</button></div>
+    <aside className={styles.card}><div className={styles.rowBetween}><strong>DRAFTS</strong><button onClick={() => { const next = defaultPublic(); const problem = next.problem; setSelected(undefined); setQuestId("custom-quest"); setTitle("Custom Quest"); setPublicJson(pretty(next)); setJudgeJson(pretty(defaultJudge())); setRichStatement(problem.richStatement); setStatementFormat(richEditorialContentFormat); setRichHint(problem.richHint); setHintFormat(richEditorialContentFormat); }}>NEW</button></div>
       <div className={styles.list}>{items.map((item) => <button className={styles.listButton} key={item.id} data-active={selected === item.id} onClick={() => choose(item)}><b>{item.title}</b><small>{item.questId} · r{item.revision} · {item.status}</small></button>)}</div>
     </aside>
     <section className={styles.card}>
       <div className={styles.formRow}><input value={questId} onChange={(e) => setQuestId(e.target.value)} placeholder="quest-id" /><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="title" /></div>
+      <label>QUEST STATEMENT</label>
+      <EditorialComposer
+        locale={locale}
+        disabled={false}
+        initialContent={richStatement}
+        contentFormat={statementFormat}
+        documentKey={`${selected ?? "new"}:statement`}
+        onChange={(content, _count, tooLarge) => { setRichStatement(content); setStatementFormat(richEditorialContentFormat); setStatementTooLarge(tooLarge); }}
+      />
+      <label>CODEX WHISPER / HINT</label>
+      <EditorialComposer
+        locale={locale}
+        disabled={false}
+        initialContent={richHint}
+        contentFormat={hintFormat}
+        documentKey={`${selected ?? "new"}:hint`}
+        onChange={(content, _count, tooLarge) => { setRichHint(content); setHintFormat(richEditorialContentFormat); setHintTooLarge(tooLarge); }}
+      />
       <label>PUBLIC DEFINITION<textarea className={styles.jsonEditor} value={publicJson} onChange={(e) => setPublicJson(e.target.value)} /></label>
       <label>JUDGE DEFINITION<textarea className={styles.jsonEditor} value={judgeJson} onChange={(e) => setJudgeJson(e.target.value)} /></label>
-      <div className={styles.formRow}><button onClick={() => void save()}>SAVE DRAFT</button><button onClick={() => void act("preview")}>PREVIEW</button><button onClick={() => void act("publish")}>PUBLISH</button></div>
+      <div className={styles.formRow}><button disabled={statementTooLarge || hintTooLarge} onClick={() => void save()}>SAVE DRAFT</button><button onClick={() => void act("preview")}>PREVIEW</button><button onClick={() => void act("publish")}>PUBLISH</button></div>
       {message && <p className={styles.message}>{message}</p>}
       {preview && <pre className={styles.preview}>{pretty(preview)}</pre>}
       {!!versions.length && <div className={styles.list}><strong>VERSIONS</strong>{versions.map((item) => <div className={styles.listRow} key={item.version}><span>v{item.version} · {item.note}</span><button onClick={() => void apiJson(`/admin/quests/${questId}/versions/${item.version}/rollback`, { method: "POST", body: JSON.stringify({ note: `Rollback to v${item.version}` }) }).then(() => setMessage(`ROLLED BACK TO V${item.version}`))}>ROLLBACK</button></div>)}</div>}
