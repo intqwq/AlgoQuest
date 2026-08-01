@@ -13,15 +13,17 @@ flowchart TD
     G -->|/api/*| A["Core API"]
     A -->|SQL| D[("PostgreSQL")]
     A -->|private REST + bearer token| J["Judge API"]
-    J -->|Docker socket| R["Disposable C++14 runner"]
+    J -->|persistent jobs| Q[("Redis")]
+    Q --> K["Judge worker"]
+    K -->|Docker socket| R["Disposable C++14 runner"]
     A -->|server-side verification| T["Cloudflare Turnstile"]
     A -->|transactional email| E["Resend"]
 ```
 
 The public boundary ends at the Gateway. The Web application contains only
 public configuration and browser code. The Core API owns identity, authorization,
-content policy, saves, and database access. The Judge owns queueing and Docker
-execution.
+content policy, saves, and database access. The Judge API owns validation and
+queueing; a separate worker owns Docker execution.
 
 ## Design principles
 
@@ -30,8 +32,9 @@ execution.
    deployment.
 2. **Single data owner.** PostgreSQL is not exposed as an application API. Only
    the Core API reads or writes player and platform data.
-3. **Single execution owner.** Only the Judge service can access the Docker
-   socket. The Core API sends validated jobs over a private HTTP contract.
+3. **Single execution owner.** Only the dedicated Judge worker can access the
+   Docker socket. The socket-free Judge API accepts jobs over a private HTTP
+   contract and persists them in Redis.
 4. **Server-authoritative progression.** A quest can be marked cleared only when
    the account has a persisted submission whose accepted score meets the quest's
    pass threshold.
@@ -141,17 +144,18 @@ The Core API is a Node.js HTTP service on port `8787`. It is responsible for:
 
 ### Judge
 
-The Judge is a Node.js HTTP service on port `8788`. Its API is private except for
-`GET /health`.
+The Judge API is a Node.js HTTP service on port `8788`. Its API is private
+except for `GET /health` and the metrics endpoint on the private network.
 
 It owns:
 
-- a bounded in-memory submission queue;
+- a bounded Redis-backed submission queue;
 - configurable worker concurrency;
 - one active submission per request owner;
-- an in-memory result TTL;
+- a Redis result TTL and append-only queue persistence;
 - validation of language, mode, source size, and quest existence;
 - built-in hidden tests plus token-authenticated trusted dynamic quest tests;
+- a Docker-free API process and a dedicated Docker-capable worker;
 - one disposable Docker container per submission;
 - a bounded compile cache keyed by source and compiler configuration;
 - verdict and score calculation.
@@ -415,22 +419,23 @@ peer addresses through a firewall, private LAN, VPN, or Tailnet.
 - When Judge polling fails, the Core API returns a persisted terminal result when
   one exists. Nonterminal jobs return a retryable status instead of inventing a
   result.
-- Restarting the Judge loses queued/running jobs and in-memory status entries.
-  Results already stored in PostgreSQL remain durable.
+- Restarting the Judge API does not lose queued jobs. An interrupted worker
+  requeues its processing list on startup. Results already stored in PostgreSQL
+  remain durable.
 
 ## Scaling path
 
-The current deployment deliberately favors a simple self-hosted topology. The
-main scale limit is the Judge's local queue and memory-resident result store.
+The current deployment deliberately favors a simple self-hosted topology. Redis
+removes the former in-memory queue limit; CPU and sandbox startup throughput on
+the worker host remain the primary scale limits.
 
 A production scale-out path is:
 
-1. replace the local queue with Redis or another durable broker;
-2. run multiple stateless Judge workers;
-3. store job state outside worker memory;
-4. place the Core API and workers on private authenticated networks;
-5. move public untrusted execution onto dedicated worker hosts;
-6. add metrics, structured logs, backup policy, and database migration tracking.
+1. use Redis Streams consumer groups when multiple worker hosts are required;
+2. place the Core API and workers on private authenticated networks;
+3. move public untrusted execution onto dedicated worker hosts;
+4. scrape the built-in Prometheus endpoints and centralize JSON logs;
+5. add Redis/PostgreSQL backup and restore drills.
 
 The browser and Core API contracts do not require the queue implementation to
 remain local, so this change can be made behind the existing Judge boundary.

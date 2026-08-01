@@ -23,7 +23,7 @@ Compose stack supports Windows development and Raspberry Pi 5 deployment.
 | Campaign | 22 built-in C++14 missions, adaptive recommended starting points, prerequisite unlocking, XP totals, branching-ready map data, and support for database-backed custom quests |
 | Learning journey | Registration records prior C++ and algorithm experience; every player receives the first-use site tutorial, while every quest has a skippable and replayable animated prologue |
 | Mission workbench | Lazy-loaded Monaco editor, local and cloud draft autosave, sample runs, hidden-test submissions, per-case verdicts, time and memory reporting |
-| Judge | Bounded in-memory queue, one active submission per player, configurable cooldown, compile cache, and one disposable Docker container per submission |
+| Judge | Redis-backed durable queue, socket-free private API, dedicated Docker worker, configurable cooldown, compile cache, and one disposable container per submission |
 | Accounts | Guest bootstrap, registration, email verification, login/logout, password reset, hashed bearer sessions, Resend email, and Cloudflare Turnstile |
 | Saves | PostgreSQL-backed progress, drafts, exact submitted source snapshots, durable terminal results, and explicit local-versus-cloud conflict resolution |
 | Editorial | Per-quest discussions and solutions with rich text, font controls, highlighted code blocks, links, lists, and KaTeX formulas; discussions require a submission, solutions require a clear, and player solutions enter moderation |
@@ -34,18 +34,20 @@ Compose stack supports Windows development and Raspberry Pi 5 deployment.
 
 ## Architecture
 
-The public application is split into four independently deployable services:
+The public application is split into independently deployable services:
 
 | Service | Default port | Responsibility |
 |---|---:|---|
 | Gateway + Web | `8080` on Windows, `80` on manual Pi, loopback `8080` on tunneled Pi | Nginx origin, Vinext/React UI, same-origin `/api` proxy |
 | Core API | `8787` | Accounts, roles, saves, quests, editorial, administration, and Judge orchestration |
-| Judge | `8788` | Queueing, GNU C++14 compilation, isolated execution, result lifecycle |
+| Judge API | `8788` | Validation, durable queueing, polling, and result lifecycle |
+| Judge worker | private | GNU C++14 compilation and isolated execution |
+| Redis | `6379` private | Persistent Judge queue and short-lived results |
 | PostgreSQL | `5432` | Users, sessions, progress, drafts, submissions, quest catalog, moderation, and settings |
 
 The browser never receives database credentials or the private Judge token. The
-Core API is the only application client of PostgreSQL, while the Judge is the only
-service with access to the Docker socket.
+Core API is the only application client of PostgreSQL. The Judge API has no
+Docker access; only the dedicated worker receives the Docker socket.
 
 ```text
 Browser
@@ -56,7 +58,9 @@ Browser
             -> Resend
             -> Cloudflare Turnstile
             -> Judge API
-                 -> disposable runner container
+                 -> Redis
+                      -> Judge worker
+                           -> disposable runner container
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for trust boundaries, data ownership,
@@ -249,8 +253,8 @@ poll, receive an accepted score, persist the submission, and clear the quest.
 app/                  Vinext/React route and global styling
 components/           Account, map, mission, Codex, editorial, and admin UI
 lib/                  Quest/Codex data, localization, save logic, and API client
-services/api/         Core HTTP API, PostgreSQL access, migrations, tests
-judge/                Queue, private Judge API, runner image, tests, stress tool
+services/api/         Explicit auth/learning/OJ routes, PostgreSQL repositories, migrations, tests
+judge/                Redis queue, socket-free API, Docker worker, runner image and tests
 deploy/docker/        Web container
 deploy/nginx/         Same-origin gateway configuration
 deploy/windows/       PowerShell deployment commands
@@ -268,12 +272,11 @@ runner uses no network, a read-only root filesystem, dropped capabilities,
 outer wall-clock timeout.
 
 This is strong process isolation for a self-hosted learning platform, not a
-separate-kernel security boundary. Docker shares the host kernel, and the Judge
-service holds the Docker socket. Run public untrusted submissions on a dedicated,
-replaceable host with timely kernel and Docker updates.
+separate-kernel security boundary. Docker shares the host kernel, and the
+dedicated Judge worker holds the Docker socket. Run public untrusted submissions
+on a dedicated, replaceable host with timely kernel and Docker updates.
 
-The current queue and result cache live in Judge memory. Restarting the Judge
-loses queued/running jobs, although terminal results already persisted by the Core
-API remain available. The next scaling step is a durable queue such as Redis plus
-multiple Judge workers; the existing Core API boundary is designed to permit that
-replacement.
+Queued jobs and short-lived results live in Redis with append-only persistence.
+The socket-free Judge API can restart without losing queued work; an interrupted
+worker requeues its processing list on startup. Terminal results already stored
+by the Core API remain the long-term source of truth.

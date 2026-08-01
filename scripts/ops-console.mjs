@@ -6,7 +6,15 @@ const args = process.argv.slice(2);
 const envIndex = args.indexOf("--env-file");
 const envFile = envIndex >= 0 ? args[envIndex + 1] : ".env.windows";
 const composeBase = ["compose", "--env-file", envFile];
-const allowedServices = new Set(["gateway", "web", "api", "judge", "db"]);
+const allowedServices = new Set([
+  "gateway",
+  "web",
+  "api",
+  "judge",
+  "judge-worker",
+  "redis",
+  "db",
+]);
 
 function run(command, commandArgs, { inherit = true } = {}) {
   const result = spawnSync(command, commandArgs, {
@@ -42,7 +50,7 @@ function help() {
 AlgoQuest operations commands
   help
   status
-  logs [gateway|web|api|judge|db]
+  logs [gateway|web|api|judge|judge-worker|redis|db]
   users [name-or-email]
   role <email> <player|admin>
   quests

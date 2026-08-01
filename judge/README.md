@@ -3,7 +3,7 @@
 The production path is asynchronous:
 
 ```text
-POST submission -> bounded queue -> worker -> one disposable container
+POST submission -> Redis queue -> Docker worker -> one disposable container
                                       ├─ compile once (or cache hit)
                                       ├─ case 01 child process
                                       ├─ case 02 child process
@@ -34,9 +34,10 @@ The compose defaults are deliberately conservative for a Raspberry Pi 5:
 - job and cache data on `/var/lib/algoquest`, suitable for NVMe
 
 Override `JUDGE_WORK_ROOT` and `JUDGE_CACHE_ROOT` if the NVMe is mounted
-elsewhere. These paths are mounted into the Judge service at the exact same host
-paths because the service asks the host Docker daemon to create runner
-containers.
+elsewhere. These paths are mounted into the `judge-worker` service at the exact
+same host paths because only that service asks the host Docker daemon to create
+runner containers. The `judge` API service has neither the Docker client nor
+the Docker socket.
 
 Run queue tests plus the real Docker regression suite (`AC`, `CE`, `WA`, `TLE`, `RE`, `MLE`, and `OLE`):
 
@@ -74,8 +75,8 @@ limited child processes; surviving processes are killed before the next case.
 The Docker suite also verifies that the legacy `manifest.json` path and the
 supervisor stdin cannot be used to recover hidden tests.
 
-The current queue is intentionally single-node and in-memory. It protects one
-Pi from a burst of 1,000 submissions, but jobs are not durable across a service
-restart and multiple Judge hosts do not share work. Replace the queue store with
-Redis before horizontally scaling workers for a synchronous 1,000-player
-contest.
+The queue is stored in Redis with append-only persistence. Queued jobs survive
+API restarts, and the worker requeues entries left in its processing list after
+an interrupted run. The current reliable-list design assumes one worker service
+with configurable internal concurrency; use Redis Streams consumer groups
+before running multiple independent worker hosts.

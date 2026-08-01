@@ -5,7 +5,7 @@ import {
   computeStreak,
   diffLines,
   evaluateRule,
-} from "../src/learning-extension.mjs";
+} from "../src/learning-router.mjs";
 
 test("continuous learning streak counts consecutive UTC activity days", () => {
   const streak = computeStreak([
@@ -52,28 +52,14 @@ test("submission diff reports line additions and removals", () => {
 });
 
 test("Codex writes remain behind the administrator role gate", async () => {
-  const [playerRoutes, adminRoutes, validationStart, validationEnd] = await Promise.all([
-    readFile(
-      new URL("../src/learning-extension.parts/06.jsfrag", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL("../src/learning-extension.parts/07.jsfrag", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL("../src/learning-extension.parts/04.jsfrag", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL("../src/learning-extension.parts/05.jsfrag", import.meta.url),
-      "utf8",
-    ),
-  ]);
-  const validation = validationStart + validationEnd;
-  assert.match(playerRoutes, /requireAdmin\(player\);/);
-  assert.match(adminRoutes, /\/v1\/admin\/codex/);
-  assert.match(adminRoutes, /validateCodex/);
-  assert.match(validation, /function validateCodex/);
-  assert.match(validation, /code\.slice\(0, 64 \* 1024\)/);
+  const router = await readFile(
+    new URL("../src/learning-router.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(router, /requireAdmin\(player\);/);
+  assert.match(router, /\/v1\/admin\/codex/);
+  assert.match(router, /validateCodex/);
+  assert.match(router, /function validateCodex/);
+  assert.match(router, /code\.slice\(0, 64 \* 1024\)/);
+  assert.doesNotMatch(router, /http\.createServer|data:text\/javascript|jsfrag/);
 });

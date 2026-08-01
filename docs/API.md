@@ -1040,7 +1040,8 @@ Response `200`:
   "queued": 0,
   "concurrency": 2,
   "queueCapacity": 1000,
-  "isolation": "one-container-per-submission"
+  "persistence": "redis",
+  "isolation": "dedicated-docker-worker"
 }
 ```
 

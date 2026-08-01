@@ -1,7 +1,9 @@
 import http from "node:http";
-import { judgeCpp14 } from "./docker-runner.mjs";
+import { createClient } from "redis";
 import { quests } from "./quests.mjs";
-import { QueueError, SubmissionQueue } from "./submission-queue.mjs";
+import { RedisSubmissionQueue } from "./redis-submission-queue.mjs";
+import { QueueError } from "./submission-queue.mjs";
+import { metrics, observeRequest } from "./observability.mjs";
 
 const port = Number(process.env.PORT ?? 8788);
 const maxParallel = Math.max(1, Number(process.env.JUDGE_MAX_PARALLEL ?? 2));
@@ -14,14 +16,26 @@ const resultTtlMs = Math.max(
 const allowedOrigin = process.env.JUDGE_ALLOWED_ORIGIN ?? "*";
 const apiToken = process.env.JUDGE_API_TOKEN ?? "";
 const trustProxy = process.env.JUDGE_TRUST_PROXY === "true";
+const redis = createClient({
+  url: process.env.REDIS_URL ?? "redis://127.0.0.1:6379",
+});
+redis.on("error", (error) => {
+  console.error(JSON.stringify({
+    level: "error",
+    service: "judge-api",
+    event: "redis_error",
+    message: error.message,
+  }));
+});
+await redis.connect();
 
-const submissionQueue = new SubmissionQueue({
+const submissionQueue = new RedisSubmissionQueue({
+  client: redis,
   maxParallel,
   maxQueued,
   cooldownMs,
   resultTtlMs,
-  executor: ({ source, quest }, onProgress) =>
-    judgeCpp14(source, quest, { onProgress }),
+  jobTtlMs: Number(process.env.JUDGE_JOB_TTL_MS ?? 24 * 60 * 60 * 1000),
 });
 
 function corsHeaders() {
@@ -124,6 +138,7 @@ function authorized(request) {
 }
 
 const server = http.createServer(async (request, response) => {
+  observeRequest(request, response);
   const url = new URL(request.url ?? "/", "http://judge.local");
 
   if (request.method === "OPTIONS") {
@@ -131,11 +146,20 @@ const server = http.createServer(async (request, response) => {
     return response.end();
   }
   if (request.method === "GET" && url.pathname === "/health") {
+    const stats = await submissionQueue.stats();
     return json(response, 200, {
       status: "ok",
-      ...submissionQueue.stats(),
-      isolation: "one-container-per-submission",
+      ...stats,
+      isolation: "dedicated-docker-worker",
     });
+  }
+  if (request.method === "GET" && url.pathname === "/metrics") {
+    const stats = await submissionQueue.stats();
+    response.writeHead(200, {
+      "content-type": "text/plain; version=0.0.4; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    return response.end(metrics(stats));
   }
   if (!authorized(request)) {
     return json(response, 401, { error: "UNAUTHORIZED" });
@@ -145,7 +169,7 @@ const server = http.createServer(async (request, response) => {
     /^\/v1\/submissions\/([0-9a-f-]+)$/,
   );
   if (request.method === "GET" && submissionMatch) {
-    const submission = submissionQueue.get(submissionMatch[1]);
+    const submission = await submissionQueue.get(submissionMatch[1]);
     if (!submission) return json(response, 404, { error: "UNKNOWN_SUBMISSION" });
     return json(response, 200, { submission });
   }
@@ -173,7 +197,7 @@ const server = http.createServer(async (request, response) => {
       return json(response, 413, { error: "SOURCE_TOO_LARGE" });
     }
 
-    const submission = submissionQueue.create({
+    const submission = await submissionQueue.create({
       owner: requestOwner(request),
       source: body.source,
       language: body.language,
@@ -217,7 +241,12 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(
-    `AlgoQuest judge listening on :${port} (${maxParallel} workers, queue ${maxQueued})`,
-  );
+  console.log(JSON.stringify({
+    level: "info",
+    service: "judge-api",
+    event: "server_started",
+    port,
+    concurrency: maxParallel,
+    queueCapacity: maxQueued,
+  }));
 });
