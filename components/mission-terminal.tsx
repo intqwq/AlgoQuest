@@ -11,6 +11,7 @@ import {
 import type { Locale } from "@/lib/i18n";
 import { Quest } from "@/lib/quests";
 import { EditorialPanel } from "@/components/editorial-panel";
+import { EditorialRichText } from "@/components/editorial-rich-text";
 import { QuestPrologue } from "@/components/quest-prologue";
 
 type Verdict = "AC" | "WA" | "CE" | "RE" | "TLE" | "MLE" | "OLE" | "JE";
@@ -42,9 +43,12 @@ type JudgeResponse = {
     verdict: Verdict;
     timeMs: number;
     memoryKb: number;
+    input?: string;
     expected?: string;
     received?: string;
     stderr?: string;
+    exitCode?: number;
+    signal?: number;
   }>;
 };
 
@@ -193,6 +197,7 @@ async function requestJudge(
   questId: string,
   source: string,
   mode: "sample" | "submit",
+  sampleIndex: number | undefined,
   onUpdate: (submission: Submission) => void,
   onConnectionIssue: (attempt: number, retryAfterMs: number) => void,
 ): Promise<JudgeResponse> {
@@ -204,6 +209,7 @@ async function requestJudge(
       language: "cpp14",
       source,
       mode,
+      sampleIndex,
     }),
   });
   const body = await responseBody(response);
@@ -328,6 +334,12 @@ export function MissionTerminal({
       ),
     [problem.testCaseCount],
   );
+  const samples = useMemo(
+    () => problem.samples?.length
+      ? problem.samples
+      : [{ id: "01", input: problem.sampleInput, output: problem.sampleOutput }],
+    [problem.sampleInput, problem.sampleOutput, problem.samples],
+  );
   const emptyResults = () =>
     caseIds.map((id) => ({ id, verdict: "WAIT" as const }));
 
@@ -413,13 +425,16 @@ export function MissionTerminal({
     if (response.verdict === "JE") {
       return `$ verdict\n[ JUDGE ERROR ]\n${response.error ?? "The runner exited without diagnostics."}\n> Check the Judge service logs and rerun the deployment smoke test.`;
     }
-    if (response.verdict === "WA") {
-      return "$ verdict\n[ WA ]";
-    }
     const failed = response.cases.find((item) => item.verdict !== "AC");
     if (!failed) return `$ verdict\n[ ${response.verdict} ]`;
-    const details = failed.stderr ? `\n${failed.stderr}` : "";
-    return `$ verdict\n[ ${response.verdict} ] case #${failed.id}${details}\nPatch the source and retry.`;
+    const details = [
+      `$ verdict\n[ ${response.verdict} ] case #${failed.id}`,
+      failed.input !== undefined ? `INPUT\n${failed.input}` : "",
+      failed.expected !== undefined ? `EXPECTED OUTPUT\n${failed.expected}` : "",
+      failed.received !== undefined ? `ACTUAL OUTPUT\n${failed.received}` : "",
+      failed.stderr ? `RUNTIME DIAGNOSTICS${failed.exitCode !== undefined ? ` // EXIT ${failed.exitCode}` : ""}${failed.signal ? ` // SIGNAL ${failed.signal}` : ""}\n${failed.stderr}` : "",
+    ].filter(Boolean);
+    return `${details.join("\n\n")}\n\nPatch the source and retry.`;
   };
 
   const applySubmissionUpdate = (submission: Submission) => {
@@ -508,7 +523,7 @@ export function MissionTerminal({
     });
   };
 
-  const runSample = async () => {
+  const runSample = async (sampleIndex = 0) => {
     if (
       ["queued", "compiling", "running"].includes(judgeState) ||
       cooldownSeconds > 0
@@ -516,46 +531,48 @@ export function MissionTerminal({
     setCooldownSeconds(5);
     setGuideProgress((current) => Math.max(current, 2));
     setJudgeState("queued");
-    setConsoleText("$ run --sample\n> Creating an isolated judge job...");
+    setConsoleText(`$ run --sample ${sampleIndex + 1}\n> Creating an isolated judge job...`);
     try {
       const response = await requestJudge(
         quest.id,
         code,
         "sample",
+        sampleIndex,
         applySubmissionUpdate,
         showConnectionRetry,
       );
-      const sample = response.cases[0];
-      if (sample?.verdict === "AC") {
+      const result = response.cases[0];
+      const sample = samples[sampleIndex];
+      if (result?.verdict === "AC") {
         setGuideProgress((current) => Math.max(current, 3));
         setResults((current) =>
-          current.map((result, index) =>
-            index === 0
+          current.map((caseResult) =>
+            caseResult.id === result.id
               ? {
-                  ...result,
+                  ...caseResult,
                   verdict: "AC",
-                  time: `${sample.timeMs} ms`,
-                  memory: formatMemory(sample.memoryKb),
+                  time: `${result.timeMs} ms`,
+                  memory: formatMemory(result.memoryKb),
                 }
-              : result,
+              : caseResult,
           ),
         );
         setConsoleText(
-          `$ run --sample\nINPUT    ${problem.sampleInput}\nEXPECTED ${problem.sampleOutput}\nRECEIVED ${problem.sampleOutput}\nTIME     ${sample.timeMs} ms\nMEMORY   ${formatMemory(sample.memoryKb)}\n[ SAMPLE PASSED ]`,
+          `$ run --sample ${sampleIndex + 1}\nINPUT\n${result.input ?? sample.input}\n\nEXPECTED OUTPUT\n${result.expected ?? sample.output}\n\nACTUAL OUTPUT\n${result.received ?? sample.output}\n\nTIME   ${result.timeMs} ms\nMEMORY ${formatMemory(result.memoryKb)}\n[ SAMPLE PASSED ]`,
         );
         setJudgeState("idle");
       } else {
-        if (sample) {
+        if (result) {
           setResults((current) =>
-            current.map((result, index) =>
-              index === 0
+            current.map((caseResult) =>
+              caseResult.id === result.id
                 ? {
-                    ...result,
-                    verdict: sample.verdict,
-                    time: `${sample.timeMs} ms`,
-                    memory: formatMemory(sample.memoryKb),
+                    ...caseResult,
+                    verdict: result.verdict,
+                    time: `${result.timeMs} ms`,
+                    memory: formatMemory(result.memoryKb),
                   }
-                : result,
+                : caseResult,
             ),
           );
         }
@@ -584,6 +601,7 @@ export function MissionTerminal({
         quest.id,
         code,
         "submit",
+        undefined,
         applySubmissionUpdate,
         showConnectionRetry,
       );
@@ -724,7 +742,13 @@ export function MissionTerminal({
               </span>
               <span>REWARD +{quest.xp} XP</span>
             </div>
-            {problem.story.map((paragraph) => (
+            {problem.richStatement ? (
+              <EditorialRichText
+                content={problem.richStatement}
+                contentFormat={problem.statementFormat ?? "plain"}
+                className="quest-rich-statement"
+              />
+            ) : problem.story.map((paragraph) => (
               <p key={paragraph}>{paragraph}</p>
             ))}
 
@@ -763,16 +787,28 @@ export function MissionTerminal({
             <p>{problem.output}</p>
 
             <h2>{copy.sample}</h2>
-            <div className="sample-grid">
-              <div>
-                <span>{copy.input}</span>
-                <pre>{problem.sampleInput}</pre>
+            {samples.map((sample, index) => (
+              <div className="sample-block" key={sample.id ?? index}>
+                <div className="sample-grid">
+                  <div>
+                    <span>{copy.input} #{index + 1}</span>
+                    <pre>{sample.input}</pre>
+                  </div>
+                  <div>
+                    <span>{copy.output} #{index + 1}</span>
+                    <pre>{sample.output}</pre>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="sample-button sample-button--inline"
+                  disabled={cooldownSeconds > 0 || ["queued", "compiling", "running"].includes(judgeState)}
+                  onClick={() => void runSample(index)}
+                >
+                  &gt; {copy.runSample} #{index + 1}
+                </button>
               </div>
-              <div>
-                <span>{copy.output}</span>
-                <pre>{problem.sampleOutput}</pre>
-              </div>
-            </div>
+            ))}
 
             <button
               className="hint-toggle"
@@ -783,7 +819,12 @@ export function MissionTerminal({
             {hintOpen && (
               <div className="hint-card">
                 <strong>CODEX WHISPER</strong>
-                <p>{problem.hint}</p>
+                {problem.richHint ? (
+                  <EditorialRichText
+                    content={problem.richHint}
+                    contentFormat={problem.hintFormat ?? "plain"}
+                  />
+                ) : <p>{problem.hint}</p>}
                 <button onClick={insertHint}>[ {copy.insertHint} ]</button>
               </div>
             )}
@@ -971,7 +1012,7 @@ export function MissionTerminal({
         <div>
           <button
             className="sample-button"
-            onClick={runSample}
+            onClick={() => void runSample(0)}
             disabled={cooldownSeconds > 0}
           >
             &gt; {cooldownSeconds > 0 ? `${copy.cooldown} ${cooldownSeconds}s` : copy.runSample}

@@ -21,6 +21,8 @@ export const emptyEditorialDocument = JSON.stringify({
   content: [{ type: "paragraph" }],
 });
 
+export const richEditorialContentFormat = "tiptap-json-v1" as const;
+
 const copies = {
   en: {
     paragraph: "Paragraph", heading1: "Heading 1", heading2: "Heading 2",
@@ -154,13 +156,19 @@ function Tool({
 }
 
 export function EditorialComposer({
-  locale, disabled, onChange,
+  locale, disabled, onChange, initialContent = emptyEditorialDocument,
+  contentFormat = richEditorialContentFormat, documentKey = "new", placeholder,
 }: {
   locale: Locale;
   disabled: boolean;
   onChange: (content: string, count: number, tooLarge: boolean) => void;
+  initialContent?: string;
+  contentFormat?: EditorialContentFormat;
+  documentKey?: string | number;
+  placeholder?: string;
 }) {
   const copy = copies[locale];
+  const editorPlaceholder = placeholder ?? copy.placeholder;
   const [mathMode, setMathMode] = useState<"inline" | "block" | null>(null);
   const [latex, setLatex] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
@@ -168,14 +176,14 @@ export function EditorialComposer({
 
   const editor = useEditor({
     extensions: extensions(),
-    content: JSON.parse(emptyEditorialDocument),
+    content: parseDocument(initialContent, contentFormat),
     editable: !disabled,
     immediatelyRender: false,
     editorProps: {
       attributes: {
         class: "editorial-prosemirror",
-        "aria-label": copy.placeholder,
-        "data-placeholder": copy.placeholder,
+        "aria-label": editorPlaceholder,
+        "data-placeholder": editorPlaceholder,
       },
     },
     onUpdate: ({ editor: current }) => {
@@ -193,6 +201,23 @@ export function EditorialComposer({
   useEffect(() => {
     editor?.setEditable(!disabled);
   }, [disabled, editor]);
+
+  useEffect(() => {
+    if (!editor) return;
+    const next = parseDocument(initialContent, contentFormat);
+    editor.commands.setContent(next, { emitUpdate: false });
+    const serialized = JSON.stringify(editor.getJSON());
+    const count = characterCount(editor);
+    onChange(
+      serialized,
+      count,
+      new TextEncoder().encode(serialized).byteLength > maximumSerializedBytes ||
+        count > maximumCharacters,
+    );
+    // documentKey deliberately controls external resets; editor updates must not
+    // bounce through the parent and reset the selection on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentKey, editor]);
 
   const state = useEditorState({
     editor,
@@ -358,7 +383,7 @@ export function EditorialComposer({
 
       <EditorContent editor={editor} />
       <div className="editorial-editor-status">
-        <span>{copy.placeholder}</span>
+        <span>{editorPlaceholder}</span>
         <span>{characterCount(editor).toLocaleString()} / {maximumCharacters.toLocaleString()} {copy.characters}</span>
       </div>
     </div>

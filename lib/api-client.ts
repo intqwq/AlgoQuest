@@ -95,7 +95,13 @@ export type EditorialEligibility = {
   directPublish: boolean;
 };
 
-export type OjProblemStatus = "pending" | "published" | "rejected";
+export type OjProblemStatus = "pending" | "published" | "rejected" | "archived";
+
+export type OjTagCategory = {
+  id: string;
+  label: { en: string; "zh-CN": string; ja: string };
+  tags: string[];
+};
 
 export type OjTestCase = {
   id?: string;
@@ -120,7 +126,8 @@ export type OjProblemSummary = {
 
 export type OjProblem = OjProblemSummary & {
   statement: string;
-  samples: Array<{ input: string; output: string }>;
+  statementFormat: EditorialContentFormat;
+  samples: Array<{ id: string; input: string; output: string }>;
 };
 
 export type OjProblemDraft = {
@@ -129,6 +136,7 @@ export type OjProblemDraft = {
   status: OjProblemStatus;
   title: string;
   statement: string;
+  statementFormat: EditorialContentFormat;
   timeLimitMs: number;
   memoryLimitMb: number;
   difficulty: number;
@@ -146,6 +154,7 @@ export type OjProblemDraft = {
 export type OjProblemInput = {
   title: string;
   statement: string;
+  statementFormat: EditorialContentFormat;
   timeLimitMs: number;
   memoryLimitMb: number;
   difficulty: number;
@@ -163,7 +172,18 @@ export type JudgeSubmissionState = {
   score?: number;
   compilerOutput?: string;
   error?: string;
-  cases: Array<{ id: string; verdict: string; timeMs?: number; memoryKb?: number }>;
+  cases: Array<{
+    id: string;
+    verdict: string;
+    timeMs?: number;
+    memoryKb?: number;
+    input?: string;
+    expected?: string;
+    received?: string;
+    stderr?: string;
+    exitCode?: number;
+    signal?: number;
+  }>;
 };
 
 export type ServerOverview = {
@@ -622,8 +642,11 @@ export async function loadOjTags() {
     headers: { accept: "application/json" },
   });
   if (!response.ok) throw new AuthApiError("OJ_TAGS_UNAVAILABLE", response.status);
-  const body = (await response.json()) as { tags?: string[] };
-  return Array.isArray(body.tags) ? body.tags : [];
+  const body = (await response.json()) as { tags?: string[]; categories?: OjTagCategory[] };
+  return {
+    tags: Array.isArray(body.tags) ? body.tags : [],
+    categories: Array.isArray(body.categories) ? body.categories : [],
+  };
 }
 
 export async function loadOjProblems(filters: {
@@ -717,13 +740,43 @@ export async function moderateOjProblem(
   return body.problem;
 }
 
-export async function submitOjSolution(publicId: number, source: string) {
+export async function adminUpdateOjProblem(problemId: string, input: OjProblemInput) {
+  const body = await adminJson<{ problem: OjProblemDraft }>(
+    `/admin/oj/problems/${encodeURIComponent(problemId)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.problem;
+}
+
+export async function archiveOjProblem(problemId: string) {
+  const body = await adminJson<{ problem: OjProblemDraft }>(
+    `/admin/oj/problems/${encodeURIComponent(problemId)}/archive`,
+    { method: "POST" },
+  );
+  return body.problem;
+}
+
+export async function deleteOjProblem(problemId: string) {
+  await adminJson(`/admin/oj/problems/${encodeURIComponent(problemId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function submitOjSolution(
+  publicId: number,
+  source: string,
+  options: { mode?: "sample" | "submit"; sampleIndex?: number } = {},
+) {
   const body = await adminJson<{ submission: JudgeSubmissionState }>(
     `/oj/problems/${publicId}/submissions`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source }),
+      body: JSON.stringify({ source, mode: options.mode ?? "submit", sampleIndex: options.sampleIndex }),
     },
   );
   return body.submission;

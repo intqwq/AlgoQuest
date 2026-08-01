@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  oiAlgorithmTagCategories,
   oiAlgorithmTags,
   OjValidationError,
   publicOjProblem,
@@ -12,6 +13,7 @@ import {
 const validProblem = {
   title: "Range Signal",
   statement: "Given an integer sequence, answer every requested range sum query.",
+  statementFormat: "plain",
   timeLimitMs: 1000,
   memoryLimitMb: 128,
   difficulty: 4,
@@ -28,8 +30,13 @@ test("OJ validation accepts bounded problems from the fixed OI taxonomy", () => 
   assert.deepEqual(problem.tags, ["前缀和", "数组"]);
   assert.equal(problem.tests.length, 2);
   assert.equal(problem.tests[0].id, "01");
-  assert.ok(oiAlgorithmTags.length >= 150);
+  assert.ok(oiAlgorithmTags.length >= 220);
   assert.equal(new Set(oiAlgorithmTags).size, oiAlgorithmTags.length);
+  assert.ok(oiAlgorithmTagCategories.length >= 10);
+  assert.deepEqual(
+    new Set(oiAlgorithmTagCategories.flatMap((category) => category.tags)),
+    new Set(oiAlgorithmTags),
+  );
 });
 
 test("OJ validation rejects forged tags and problems without a public sample", () => {
@@ -54,23 +61,31 @@ test("public OJ payload exposes samples but never hidden answers or std source",
     publishedAt: new Date().toISOString(),
   };
   const publicProblem = publicOjProblem(stored);
-  assert.deepEqual(publicProblem.samples, [{ input: validProblem.tests[0].input, output: validProblem.tests[0].expected }]);
+  assert.deepEqual(publicProblem.samples, [{ id: "01", input: validProblem.tests[0].input, output: validProblem.tests[0].expected }]);
+  assert.equal(publicProblem.statementFormat, "plain");
   assert.equal("tests" in publicProblem, false);
   assert.equal("stdSource" in publicProblem, false);
   assert.equal(trustedOjQuest(stored).tests.length, 2);
 });
 
-test("OJ migration assigns public IDs only during approval", async () => {
-  const [migration, repository, routes, server] = await Promise.all([
+test("OJ migrations preserve public versions while author edits await review", async () => {
+  const [migration, revisionMigration, repository, routes, server] = await Promise.all([
     readFile(new URL("../migrations/100_oj_platform.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/101_oj_revisions_and_rich_text.sql", import.meta.url), "utf8"),
     readFile(new URL("../src/repositories/oj-repository.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/routes/oj-routes.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/server.mjs", import.meta.url), "utf8"),
   ]);
   assert.match(migration, /public_id bigint UNIQUE/);
   assert.match(migration, /status = 'published' AND public_id IS NOT NULL/);
+  assert.match(revisionMigration, /pending_revision jsonb/);
+  assert.match(revisionMigration, /statement_format/);
   assert.match(repository, /nextval\('oj_problem_public_id_seq'\)/);
   assert.match(repository, /status IN \('pending', 'rejected'\)/);
+  assert.match(repository, /revision_status = 'pending'/);
+  assert.match(repository, /adminUpdateOjProblem/);
+  assert.match(repository, /archiveOjProblem/);
+  assert.match(repository, /deleteOjProblem/);
   assert.match(routes, /requireAdmin\(player\)[\s\S]*moderateOjProblem/);
   assert.match(server, /trustedQuest: trustedOjQuest\(problem\)/);
   assert.match(server, /!record\.questId\.startsWith\("oj-"\)/);

@@ -28,3 +28,15 @@ test("Learning OS exposes continuous learning and player tools", async () => {
   assert.match(profile, /PUBLIC PLAYER RECORD/);
 });
 
+test("quest administration uses the same rich editor for statements and hints", async () => {
+  const [admin, mission] = await Promise.all([
+    readFile(new URL("../components/learning-system/admin-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/mission-terminal.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(admin, /<EditorialComposer/);
+  assert.match(admin, /QUEST STATEMENT/);
+  assert.match(admin, /CODEX WHISPER \/ HINT/);
+  assert.match(admin, /richStatement/);
+  assert.match(mission, /problem\.richStatement/);
+  assert.match(mission, /problem\.richHint/);
+});

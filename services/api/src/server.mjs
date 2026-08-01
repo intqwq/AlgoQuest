@@ -231,6 +231,15 @@ function boundedText(value, maxLength, fallback = "") {
     : fallback;
 }
 
+function validateQuestRichText(content, format) {
+  try {
+    return validateEditorialContent(content, format);
+  } catch (error) {
+    if (error instanceof EditorialContentError) throw new ApiError(400, error.code);
+    throw error;
+  }
+}
+
 function validatePublicQuest(value, questId) {
   if (!value || typeof value !== "object") {
     throw new ApiError(400, "INVALID_QUEST_DEFINITION");
@@ -260,6 +269,24 @@ function validatePublicQuest(value, questId) {
   if (!story.length || !guidance.length) {
     throw new ApiError(400, "QUEST_GUIDANCE_REQUIRED");
   }
+  const samples = Array.isArray(problem.samples)
+    ? problem.samples.slice(0, 20).map((sample, index) => {
+        if (!sample || typeof sample.input !== "string" || typeof sample.output !== "string") {
+          throw new ApiError(400, "INVALID_QUEST_SAMPLE");
+        }
+        return {
+          id: boundedText(sample.id, 32, String(index + 1).padStart(2, "0")),
+          input: sample.input.slice(0, 64 * 1024),
+          output: sample.output.slice(0, 64 * 1024),
+        };
+      })
+    : [];
+  const richStatement = problem.richStatement
+    ? validateQuestRichText(problem.richStatement, problem.statementFormat)
+    : undefined;
+  const richHint = problem.richHint
+    ? validateQuestRichText(problem.richHint, problem.hintFormat)
+    : undefined;
   return {
     id: questId,
     index: boundedText(value.index, 8, "??"),
@@ -286,13 +313,16 @@ function validatePublicQuest(value, questId) {
     ),
     problem: {
       story,
+      ...(richStatement ? { richStatement: richStatement.content, statementFormat: richStatement.contentFormat } : {}),
       guidance,
       input: boundedText(problem.input, 4000),
       constraints: boundedText(problem.constraints, 4000),
       output: boundedText(problem.output, 4000),
       sampleInput: boundedText(problem.sampleInput, 64 * 1024),
       sampleOutput: boundedText(problem.sampleOutput, 64 * 1024),
+      ...(samples.length ? { samples } : {}),
       hint: boundedText(problem.hint, 4000),
+      ...(richHint ? { richHint: richHint.content, hintFormat: richHint.contentFormat } : {}),
       hintMarker: boundedText(problem.hintMarker, 1000),
       hintCode:
         typeof problem.hintCode === "string"
@@ -340,6 +370,7 @@ function validateJudgeQuest(value, publicQuest) {
       id: String(index + 1).padStart(2, "0"),
       input: test.input,
       expected: test.expected,
+      sample: test.sample === true || index < (publicQuest.problem.samples?.length ?? 1),
     };
   });
   if (!tests.length) throw new ApiError(400, "QUEST_TESTS_REQUIRED");
@@ -699,6 +730,7 @@ const server = http.createServer(async (request, response) => {
         requireAdmin,
         validUuid,
         boundedText,
+        validatedOjProblem,
       })
     ) {
       return;
@@ -1147,6 +1179,12 @@ const server = http.createServer(async (request, response) => {
         });
       }
       const questId = `oj-${problem.publicId}`;
+      const mode = body.mode === "sample" ? "sample" : "submit";
+      const requestedSampleIndex = Number(body.sampleIndex ?? 0);
+      if (mode === "sample" && (!Number.isInteger(requestedSampleIndex) || requestedSampleIndex < 0)) {
+        throw new ApiError(400, "UNKNOWN_SAMPLE");
+      }
+      const sampleIndex = mode === "sample" ? requestedSampleIndex : undefined;
       const upstream = await judgeRequest("/v1/submissions", {
         method: "POST",
         headers: judgeHeaders(player.id, "application/json", request.requestId),
@@ -1154,7 +1192,8 @@ const server = http.createServer(async (request, response) => {
           questId,
           source: body.source,
           language: "cpp14",
-          mode: "submit",
+          mode,
+          sampleIndex,
           trustedQuest: trustedOjQuest(problem),
         }),
       });
@@ -1167,7 +1206,7 @@ const server = http.createServer(async (request, response) => {
           result.submission.status,
           body.source,
           "cpp14",
-          "submit",
+          mode,
         );
       }
       const headers = {};

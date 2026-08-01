@@ -1,4 +1,5 @@
 import {
+  oiAlgorithmTagCategories,
   oiAlgorithmTags,
   publicOjProblem,
 } from "../oj.mjs";
@@ -7,7 +8,7 @@ export async function handlePublicOjRoutes(context) {
   const { request, response, url, database, json, ApiError, boundedText } =
     context;
   if (request.method === "GET" && url.pathname === "/v1/oj/tags") {
-    json(response, 200, { tags: oiAlgorithmTags });
+    json(response, 200, { tags: oiAlgorithmTags, categories: oiAlgorithmTagCategories });
     return true;
   }
   if (request.method === "GET" && url.pathname === "/v1/oj/problems") {
@@ -143,11 +144,12 @@ export async function handleAdminOjRoutes(context) {
     requireAdmin,
     validUuid,
     boundedText,
+    validatedOjProblem,
   } = context;
   if (request.method === "GET" && url.pathname === "/v1/admin/oj/problems") {
     requireAdmin(player);
     const requestedStatus = url.searchParams.get("status");
-    const status = ["pending", "published", "rejected"].includes(
+    const status = ["pending", "published", "rejected", "archived"].includes(
       requestedStatus,
     )
       ? requestedStatus
@@ -160,6 +162,37 @@ export async function handleAdminOjRoutes(context) {
   const match = url.pathname.match(
     /^\/v1\/admin\/oj\/problems\/([0-9a-f-]{36})$/i,
   );
+  if (request.method === "PUT" && match) {
+    requireAdmin(player);
+    if (!validUuid(match[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
+    const body = await readJson(request, 8 * 1024 * 1024);
+    const problem = await database.adminUpdateOjProblem(
+      match[1], player.id, validatedOjProblem(body),
+    );
+    if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
+    json(response, 200, { problem });
+    return true;
+  }
+  if (request.method === "DELETE" && match) {
+    requireAdmin(player);
+    if (!validUuid(match[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
+    if (!(await database.deleteOjProblem(match[1]))) {
+      throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
+    }
+    json(response, 200, { deleted: true });
+    return true;
+  }
+  const archiveMatch = url.pathname.match(
+    /^\/v1\/admin\/oj\/problems\/([0-9a-f-]{36})\/archive$/i,
+  );
+  if (request.method === "POST" && archiveMatch) {
+    requireAdmin(player);
+    if (!validUuid(archiveMatch[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
+    const problem = await database.archiveOjProblem(archiveMatch[1], player.id);
+    if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
+    json(response, 200, { problem });
+    return true;
+  }
   if (request.method === "PATCH" && match) {
     requireAdmin(player);
     if (!validUuid(match[1])) {

@@ -4,6 +4,7 @@ import { quests } from "./quests.mjs";
 import { RedisSubmissionQueue } from "./redis-submission-queue.mjs";
 import { QueueError } from "./submission-queue.mjs";
 import { metrics, observeRequest } from "./observability.mjs";
+import { selectedQuest } from "./sample-selection.mjs";
 
 const port = Number(process.env.PORT ?? 8788);
 const maxParallel = Math.max(1, Number(process.env.JUDGE_MAX_PARALLEL ?? 2));
@@ -79,15 +80,6 @@ function requestOwner(request) {
   return `ip:${request.socket.remoteAddress ?? "unknown"}`;
 }
 
-function selectedQuest(quest, mode) {
-  if (mode !== "sample") return quest;
-  return {
-    ...quest,
-    passScore: 100,
-    tests: quest.tests.slice(0, 1),
-  };
-}
-
 function trustedQuest(value) {
   if (!value || typeof value !== "object" || !Array.isArray(value.tests)) {
     return undefined;
@@ -106,6 +98,7 @@ function trustedQuest(value) {
       id: String(index + 1).padStart(2, "0"),
       input: test.input,
       expected: test.expected,
+      sample: test.sample === true,
     };
   });
   if (!tests.length) throw new Error("INVALID_TRUSTED_QUEST");
@@ -202,7 +195,7 @@ const server = http.createServer(async (request, response) => {
       source: body.source,
       language: body.language,
       questId: body.questId,
-      quest: selectedQuest(quest, body.mode),
+      quest: selectedQuest(quest, body.mode, Number(body.sampleIndex ?? 0)),
       mode: body.mode ?? "submit",
     });
     return json(
@@ -232,6 +225,9 @@ const server = http.createServer(async (request, response) => {
         { error: error.code, ...error.details },
         headers,
       );
+    }
+    if (error.message === "UNKNOWN_SAMPLE") {
+      return json(response, 400, { error: "UNKNOWN_SAMPLE" });
     }
     const status = error.message === "PAYLOAD_TOO_LARGE" ? 413 : 500;
     return json(response, status, {

@@ -2,13 +2,18 @@ export type QuestStatus = "available" | "locked" | "secret";
 
 export type QuestProblem = {
   story: string[];
+  richStatement?: string;
+  statementFormat?: "plain" | "tiptap-json-v1";
   guidance: string[];
   input: string;
   constraints: string;
   output: string;
   sampleInput: string;
   sampleOutput: string;
+  samples?: Array<{ id?: string; input: string; output: string }>;
   hint: string;
+  richHint?: string;
+  hintFormat?: "plain" | "tiptap-json-v1";
   hintMarker: string;
   hintCode: string;
   starterCode: string;

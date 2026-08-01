@@ -296,6 +296,7 @@ export async function judgeCpp14(source, quest, { onProgress } = {}) {
     compileLimitMs: quest.compileLimitMs,
     timeLimitMs: quest.timeLimitMs,
     memoryLimitMb: quest.memoryLimitMb,
+    diagnostics: quest.diagnostics === true,
     tests: quest.tests,
   };
 
