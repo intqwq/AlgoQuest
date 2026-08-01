@@ -142,17 +142,28 @@ async function storeCache(binaryPath, cachePath) {
   }
 }
 
-async function runSubmissionContainer(jobDir, timeoutMs, onProgress) {
+async function runSubmissionContainer(jobDir, manifest, timeoutMs, onProgress) {
   const name = `aq-submit-${crypto.randomUUID()}`;
   const events = [];
   let finalResult;
   let timedOut = false;
-  const runnerJobDir = WORK_VOLUME
-    ? `/judge-data/jobs/${path.basename(jobDir)}`
-    : "/submission";
-  const jobMount = WORK_VOLUME
-    ? `type=volume,src=${WORK_VOLUME},dst=/judge-data`
-    : `type=bind,src=${jobDir},dst=/submission`;
+  let hostJobDir = jobDir;
+  if (WORK_VOLUME) {
+    const volumeInspection = await docker([
+      "volume",
+      "inspect",
+      WORK_VOLUME,
+      "--format",
+      "{{.Mountpoint}}",
+    ]);
+    const mountpoint = volumeInspection.stdout.trim();
+    if (volumeInspection.code !== 0 || !mountpoint) {
+      throw new Error(`Cannot resolve Judge work volume ${WORK_VOLUME}`);
+    }
+    hostJobDir = path.join(mountpoint, "jobs", path.basename(jobDir));
+  }
+  const runnerJobDir = "/submission";
+  const jobMount = `type=bind,src=${hostJobDir},dst=/submission,readonly`;
 
   const parseLine = (line) => {
     try {
@@ -168,6 +179,7 @@ async function runSubmissionContainer(jobDir, timeoutMs, onProgress) {
   const execution = docker(
     [
       "run",
+      "--interactive",
       "--name",
       name,
       "--network",
@@ -204,7 +216,7 @@ async function runSubmissionContainer(jobDir, timeoutMs, onProgress) {
       "/opt/algoquest/submission_runner.py",
       runnerJobDir,
     ],
-    { onLine: parseLine },
+    { input: JSON.stringify(manifest), onLine: parseLine },
   );
   const timeout = setTimeout(async () => {
     timedOut = true;
@@ -220,6 +232,15 @@ async function runSubmissionContainer(jobDir, timeoutMs, onProgress) {
     "--format",
     "{{.State.OOMKilled}}",
   ]);
+  if (finalResult?.compiled && !manifest.cacheHit) {
+    // The binary remains in the private /work tmpfs while contestant code runs.
+    // Export it only after the container stops; no writable host path is exposed.
+    await docker([
+      "cp",
+      `${name}:/work/compile/main`,
+      path.join(hostJobDir, "main"),
+    ]);
+  }
   await forceRemove(name);
 
   if (finalResult) return finalResult;
@@ -256,29 +277,27 @@ export async function judgeCpp14(source, quest, { onProgress } = {}) {
   await mkdir(jobsRoot, { recursive: true });
   const jobDir = await mkdtemp(path.join(jobsRoot, "submission-"));
   const sourcePath = path.join(jobDir, "main.cpp");
-  const manifestPath = path.join(jobDir, "manifest.json");
   const binaryPath = path.join(jobDir, "main");
   const cachedBinary = path.join(CACHE_ROOT, cacheKey(source));
   const cacheHit = CACHE_ENTRIES > 0 && (await fileExists(cachedBinary));
 
-  await chmod(jobDir, 0o777);
-  await writeFile(sourcePath, source, { mode: 0o644 });
+  // Only source and the compiled binary enter the contestant-visible mount.
+  // Hidden tests travel over the supervisor's stdin and are never persisted in
+  // the submission directory, avoiding host/container UID permission drift and
+  // preventing contestant code from opening a manifest file.
+  await chmod(jobDir, 0o755);
+  await writeFile(sourcePath, source, { mode: 0o444 });
   if (cacheHit) {
     await copyFile(cachedBinary, binaryPath);
     await chmod(binaryPath, 0o555);
-    await chmod(jobDir, 0o755);
   }
-  await writeFile(
-    manifestPath,
-    JSON.stringify({
-      cacheHit,
-      compileLimitMs: quest.compileLimitMs,
-      timeLimitMs: quest.timeLimitMs,
-      memoryLimitMb: quest.memoryLimitMb,
-      tests: quest.tests,
-    }),
-    { mode: 0o600 },
-  );
+  const manifest = {
+    cacheHit,
+    compileLimitMs: quest.compileLimitMs,
+    timeLimitMs: quest.timeLimitMs,
+    memoryLimitMb: quest.memoryLimitMb,
+    tests: quest.tests,
+  };
 
   const totalTimeoutMs =
     quest.compileLimitMs +
@@ -288,6 +307,7 @@ export async function judgeCpp14(source, quest, { onProgress } = {}) {
   try {
     const result = await runSubmissionContainer(
       jobDir,
+      manifest,
       totalTimeoutMs,
       onProgress,
     );

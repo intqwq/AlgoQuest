@@ -434,3 +434,49 @@ A production scale-out path is:
 
 The browser and Core API contracts do not require the queue implementation to
 remain local, so this change can be made behind the existing Judge boundary.
+
+## Reliability hardening boundaries
+
+### Hidden-test transport
+
+The Judge creates one disposable container per submission. The trusted manifest
+is sent through Docker stdin rather than a contestant-visible file. PID 1 reads a
+bounded JSON payload once, closes the Python stream, and pins descriptor 0 to
+`/dev/null` before any contestant process starts. Hidden tests remain only in the
+supervisor's memory, while each UID/GID `10001` child receives only its current
+test input.
+
+Only the current job directory is mounted at `/submission`, and that bind mount
+is read-only. Source is mode `0444`; a cache hit is mode `0555`. Fresh compilation
+runs in the private executable `/work` tmpfs. Once all contestant processes have
+terminated and the container has stopped, the Judge may export `/work/compile/main`
+with `docker cp`, tighten it to `0555`, and place it in the source-keyed cache.
+Submitted code therefore never sees a writable host-backed cache or work path.
+
+The real Docker regression matrix requires `AC`, `CE`, `WA`, `TLE`, `RE`, `MLE`,
+and `OLE`, asserts one container start per submission, confirms hidden expected
+and received output are omitted, and attacks the old manifest path, PID 1 command
+line, PID 1 fd 0, and `/submission` write permissions.
+
+### Turnstile reliability boundary
+
+The Core API owns the Turnstile secret and performs Siteverify itself. Each
+attempt has a four-second deadline. Network errors, timeouts, HTTP `408`, `429`,
+`5xx`, malformed transient responses, and Cloudflare `internal-error` may be
+retried up to three attempts with exponential backoff. One UUID idempotency key is
+reused across those attempts. Expired/duplicate tokens, rejected tokens, action
+or hostname mismatches, and secret configuration failures return immediately.
+
+The public API preserves the compatibility codes
+`HUMAN_VERIFICATION_FAILED` (`400`) and
+`HUMAN_VERIFICATION_UNAVAILABLE` (`503`), while adding `reason`, `retryable`,
+`resetWidget`, `attempts`, optional provider errors, and `retryAfterMs`.
+Temporary failures also emit a matching `Retry-After` header.
+
+### Merge gate
+
+`.github/workflows/ci.yml` publishes one stable job named `required-ci`. It runs
+Web lint/build/tests, Core API tests, Judge unit tests, Compose validation, the
+runner image build, the seven-verdict Docker matrix, and hidden-manifest
+isolation. The `main` ruleset should require this check and an up-to-date pull
+request before merge; see [CI.md](CI.md).

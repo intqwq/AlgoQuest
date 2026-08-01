@@ -38,7 +38,7 @@ elsewhere. These paths are mounted into the Judge service at the exact same host
 paths because the service asks the host Docker daemon to create runner
 containers.
 
-Run queue tests plus the real Docker regression suite (AC, CE, WA and TLE):
+Run queue tests plus the real Docker regression suite (`AC`, `CE`, `WA`, `TLE`, `RE`, `MLE`, and `OLE`):
 
 ```bash
 JUDGE_DOCKER_TEST=1 npm --prefix judge test
@@ -61,12 +61,18 @@ Nginx should proxy `/api/judge/` to `http://127.0.0.1:8788/`, preserving the
 path after the prefix. The browser endpoint is then
 `https://game.intqwq.com/api/judge/v1/submissions`.
 
-The service accepts source code only. Test input and expected output remain
-root-readable only inside the runner. Each submission gets one fresh container
+The service accepts source code only. Trusted test data is serialized through
+the disposable container supervisor's stdin, read once as root, and never
+written into the contestant-visible mount. The supervisor closes fd 0 before
+spawning contestant code; each child receives only its current test input.
+
+Each submission gets one fresh container
 with no network, a read-only root filesystem, a minimal capability set,
 PID/CPU/memory/file-descriptor limits, output caps, and a host-enforced
 wall-clock timeout. Individual test cases run as freshly-created, resource-
 limited child processes; surviving processes are killed before the next case.
+The Docker suite also verifies that the legacy `manifest.json` path and the
+supervisor stdin cannot be used to recover hidden tests.
 
 The current queue is intentionally single-node and in-memory. It protects one
 Pi from a burst of 1,000 submissions, but jobs are not durable across a service
