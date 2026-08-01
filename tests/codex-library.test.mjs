@@ -58,3 +58,4 @@ test("Codex UI supports search, categories, progress and quest launch", async ()
   assert.match(css, /\.codex-layout/);
   assert.match(css, /\.codex-reader/);
 });
+

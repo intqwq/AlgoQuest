@@ -5,3 +5,4 @@ SET status = 'published',
     updated_at = now()
 WHERE kind = 'discussion'
   AND status = 'pending';
+

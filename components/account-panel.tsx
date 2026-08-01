@@ -116,7 +116,6 @@ function TurnstileBox({
     </div>
   );
 }
-
 const errorMessages: Record<Locale, Record<string, string>> = {
   en: {
     INVALID_EMAIL: "Enter a valid email address.",
@@ -197,6 +196,14 @@ const accountMessages = {
     adminRole: "ADMIN",
     ownerRole: "SITE OWNER",
     controlDeck: "CONTROL DECK",
+    routeCalibration: "LEARNING ROUTE",
+    cppFoundation: "I ALREADY KNOW BASIC C++",
+    cppDescription: "Variables, conditions, loops, functions, arrays and common STL.",
+    algorithmFoundation: "I ALREADY KNOW BASIC ALGORITHMS",
+    algorithmDescription: "Complexity, sorting, binary search, prefix sums and basic search.",
+    yes: "YES",
+    no: "NO",
+    routeHint: "This selects a recommended entry point. Every skipped quest remains available.",
   },
   "zh-CN": {
     loginRegister: "登录 / 注册",
@@ -229,6 +236,14 @@ const accountMessages = {
     adminRole: "管理员",
     ownerRole: "站长",
     controlDeck: "管理控制台",
+    routeCalibration: "学习路线校准",
+    cppFoundation: "我已有 C++ 基础",
+    cppDescription: "了解变量、判断、循环、函数、数组与常用 STL。",
+    algorithmFoundation: "我已有算法基础",
+    algorithmDescription: "了解复杂度、排序、二分、前缀和与基础搜索。",
+    yes: "有",
+    no: "没有",
+    routeHint: "系统只会推荐合适起点；被跳过的关卡仍可随时进入学习。",
   },
   ja: {
     loginRegister: "ログイン / 登録",
@@ -261,8 +276,72 @@ const accountMessages = {
     adminRole: "管理者",
     ownerRole: "サイトオーナー",
     controlDeck: "管理コンソール",
+    routeCalibration: "学習ルート診断",
+    cppFoundation: "C++ の基礎がある",
+    cppDescription: "変数、分岐、ループ、関数、配列、基本 STL を理解している。",
+    algorithmFoundation: "アルゴリズムの基礎がある",
+    algorithmDescription: "計算量、ソート、二分探索、累積和、基本探索を理解している。",
+    yes: "はい",
+    no: "いいえ",
+    routeHint: "おすすめの開始地点だけが変わります。スキップしたクエストにもいつでも戻れます。",
   },
 } as const;
+
+function LearningProfileFields({
+  copy,
+  player,
+}: {
+  copy: (typeof accountMessages)[Locale];
+  player?: Player;
+}) {
+  return (
+    <fieldset className="learning-profile-fields">
+      <legend>{copy.routeCalibration}</legend>
+      <p>{copy.routeHint}</p>
+      {([
+        [
+          "hasCppFoundation",
+          copy.cppFoundation,
+          copy.cppDescription,
+          player?.learningProfile.hasCppFoundation ?? false,
+        ],
+        [
+          "hasAlgorithmFoundation",
+          copy.algorithmFoundation,
+          copy.algorithmDescription,
+          player?.learningProfile.hasAlgorithmFoundation ?? false,
+        ],
+      ] as const).map(([name, title, description, current]) => (
+        <div className="learning-profile-choice" key={name}>
+          <div>
+            <strong>{title}</strong>
+            <small>{description}</small>
+          </div>
+          <div className="learning-profile-toggle">
+            <label>
+              <input
+                type="radio"
+                name={name}
+                value="no"
+                defaultChecked={!current}
+              />
+              <span>{copy.no}</span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name={name}
+                value="yes"
+                defaultChecked={current}
+              />
+              <span>{copy.yes}</span>
+            </label>
+          </div>
+        </div>
+      ))}
+    </fieldset>
+  );
+}
 
 function messageFor(error: unknown, locale: Locale) {
   if (error instanceof AuthApiError) {
@@ -392,6 +471,9 @@ export function AccountPanel({
           email,
           password: String(form.get("password") ?? ""),
           turnstileToken,
+          hasCppFoundation: form.get("hasCppFoundation") === "yes",
+          hasAlgorithmFoundation:
+            form.get("hasAlgorithmFoundation") === "yes",
         });
         setPendingEmail(email);
         onPlayerChange(nextPlayer);
@@ -436,9 +518,12 @@ export function AccountPanel({
         setMessage("ACCESS KEY REPLACED // ALL OLD SESSIONS REVOKED");
         window.history.replaceState(null, "", window.location.pathname);
       } else if (view === "profile") {
-        const nextPlayer = await updatePlayerProfile(
-          String(form.get("displayName") ?? ""),
-        );
+        const nextPlayer = await updatePlayerProfile({
+          displayName: String(form.get("displayName") ?? ""),
+          hasCppFoundation: form.get("hasCppFoundation") === "yes",
+          hasAlgorithmFoundation:
+            form.get("hasAlgorithmFoundation") === "yes",
+        });
         onPlayerChange(nextPlayer);
         setMessage("PLAYER PROFILE UPDATED");
       }
@@ -531,6 +616,7 @@ export function AccountPanel({
                       required
                     />
                   </label>
+                  <LearningProfileFields copy={copy} player={player} />
                   <button className="account-submit" disabled={busy}>
                     [ {copy.update} ]
                   </button>
@@ -538,15 +624,18 @@ export function AccountPanel({
               ) : (
                 <form onSubmit={submit}>
                   {view === "register" && (
-                    <label>
-                      {copy.playerName}
-                      <input
-                        name="displayName"
-                        autoComplete="nickname"
-                        maxLength={64}
-                        required
-                      />
-                    </label>
+                    <>
+                      <label>
+                        {copy.playerName}
+                        <input
+                          name="displayName"
+                          autoComplete="nickname"
+                          maxLength={64}
+                          required
+                        />
+                      </label>
+                      <LearningProfileFields copy={copy} />
+                    </>
                   )}
                   {view !== "reset" && (
                     <label>

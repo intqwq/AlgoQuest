@@ -8,7 +8,10 @@ import { CodexLibrary } from "@/components/codex-library";
 import { QuestMap } from "@/components/quest-map";
 import {
   loadCurrentPlayer,
+  completeQuestStory,
+  completeWebTutorial,
   loadQuestCatalog,
+  loadQuestStoryProgress,
   loadPlayerSave,
   PlayerSave,
   Player,
@@ -71,7 +74,6 @@ function Difficulty({ value }: { value: number }) {
     </span>
   );
 }
-
 type SaveConflict = {
   local: PlayerSave;
   cloud: PlayerSave;
@@ -154,6 +156,9 @@ export default function Home() {
   const [mapEditing, setMapEditing] = useState(false);
   const [mapSaving, setMapSaving] = useState(false);
   const [mapDraft, setMapDraft] = useState<Record<string, MapPosition>>({});
+  const [seenStoryQuestIds, setSeenStoryQuestIds] = useState<Set<string>>(
+    new Set(),
+  );
   const copy = text(locale);
   const displayedQuests = useMemo(
     () => questCatalog.map((quest) => localizeQuest(quest, locale)),
@@ -309,6 +314,7 @@ export default function Home() {
         ) {
           setPlayerSave(undefined);
           setCleared(new Set());
+          setSeenStoryQuestIds(new Set());
           setSaveConflict(undefined);
           setScreen("world");
           setNotice(
@@ -319,10 +325,20 @@ export default function Home() {
           return;
         }
 
-        const [cloud, local] = await Promise.all([
+        const [cloud, local, storyProgress] = await Promise.all([
           loadPlayerSave(),
           Promise.resolve(loadLocalPlayerSave(currentPlayer.id)),
+          loadQuestStoryProgress().catch(() => []),
         ]);
+        setSeenStoryQuestIds(
+          new Set(storyProgress.map((item) => item.questId)),
+        );
+        const recommended = questCatalog.find(
+          (quest) => quest.id === currentPlayer.recommendedQuestId,
+        );
+        if (recommended && !cloud.progress.length && !local.progress.length) {
+          setSelected(recommended);
+        }
         if (savesConflict(local, cloud)) {
           setPlayerSave(undefined);
           setCleared(new Set());
@@ -339,13 +355,20 @@ export default function Home() {
       })
       .catch((error) => {
         setPlayerSave(undefined);
+        setSeenStoryQuestIds(new Set());
         setSaveError(
           error instanceof Error ? error.message : "Save service unavailable.",
         );
         setNotice(copy.saveOffline);
       })
       .finally(() => setSyncingSave(false));
-  }, [applySave, copy.accountRequired, copy.emailRequired, copy.saveOffline]);
+  }, [
+    applySave,
+    copy.accountRequired,
+    copy.emailRequired,
+    copy.saveOffline,
+    questCatalog,
+  ]);
 
   useEffect(() => {
     // Initial authentication and save hydration intentionally update page state.
@@ -359,7 +382,11 @@ export default function Home() {
       const mission = questCatalog.find(
         (quest) => quest.id === missionId && quest.problem,
       );
-      if (mission && canPlay && isQuestUnlocked(mission, cleared)) {
+      if (
+        mission &&
+        canPlay &&
+        isQuestUnlocked(mission, cleared, player?.recommendedQuestId)
+      ) {
         setSelected(mission);
         setScreen("mission");
       } else {
@@ -373,7 +400,7 @@ export default function Home() {
     syncScreenFromHash();
     window.addEventListener("hashchange", syncScreenFromHash);
     return () => window.removeEventListener("hashchange", syncScreenFromHash);
-  }, [canPlay, cleared, questCatalog]);
+  }, [canPlay, cleared, player?.recommendedQuestId, questCatalog]);
 
   const chooseSave = async (choice: "local" | "cloud") => {
     if (!saveConflict) return;
@@ -449,7 +476,7 @@ export default function Home() {
       openAccount("login");
       return;
     }
-    if (!isQuestUnlocked(quest, cleared)) {
+    if (!isQuestUnlocked(quest, cleared, player?.recommendedQuestId)) {
       setSelected(quest);
       setNotice(
         quest.status === "secret"
@@ -477,9 +504,15 @@ export default function Home() {
   };
 
   const playableQuests = questCatalog.filter((quest) =>
-    isQuestUnlocked(quest, cleared),
+    isQuestUnlocked(quest, cleared, player?.recommendedQuestId),
+  );
+  const recommendedQuest = questCatalog.find(
+    (quest) => quest.id === player?.recommendedQuestId,
   );
   const nextQuest =
+    (recommendedQuest && !cleared.has(recommendedQuest.id)
+      ? recommendedQuest
+      : undefined) ??
     playableQuests.find((quest) => !cleared.has(quest.id)) ??
     playableQuests.at(-1) ??
     questCatalog[0];
@@ -490,7 +523,31 @@ export default function Home() {
     .filter((quest) => cleared.has(quest.id))
     .reduce((sum, quest) => sum + quest.xp, 0);
   const maximumXp = questCatalog.reduce((sum, quest) => sum + quest.xp, 0);
-  const selectedPlayable = isQuestUnlocked(selected, cleared);
+  const selectedPlayable = isQuestUnlocked(
+    selected,
+    cleared,
+    player?.recommendedQuestId,
+  );
+
+  const finishWebTutorial = async () => {
+    setPlayer((current) =>
+      current ? { ...current, tutorialCompleted: true } : current,
+    );
+    try {
+      setPlayer(await completeWebTutorial());
+    } catch {
+      setNotice("TUTORIAL SAVED LOCALLY // CLOUD LINK RETRYING");
+    }
+  };
+
+  const finishQuestStory = async (questId: string) => {
+    setSeenStoryQuestIds((current) => new Set(current).add(questId));
+    try {
+      await completeQuestStory(questId);
+    } catch {
+      setNotice("STORY PROGRESS SAVED LOCALLY // CLOUD LINK RETRYING");
+    }
+  };
 
   return (
     <main className="site-shell" lang={locale === "zh-CN" ? "zh-CN" : locale}>
@@ -642,6 +699,10 @@ export default function Home() {
           onComplete={completeQuest}
           onDraftChange={saveDraft}
           onSubmission={recordSubmission}
+          tutorialRequired={!player?.tutorialCompleted}
+          storySeen={seenStoryQuestIds.has(selected.id)}
+          onTutorialComplete={finishWebTutorial}
+          onStoryComplete={finishQuestStory}
         />
       ) : (
         <>
@@ -825,7 +886,11 @@ export default function Home() {
         <div className="world-grid">
           <QuestMap
             questStates={mapQuests.map((quest) => {
-              const playable = isQuestUnlocked(quest, cleared);
+              const playable = isQuestUnlocked(
+                quest,
+                cleared,
+                player?.recommendedQuestId,
+              );
               const completed = cleared.has(quest.id);
               const displayStatus =
                 playable || completed ? "available" : quest.status;

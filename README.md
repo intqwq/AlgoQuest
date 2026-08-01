@@ -5,10 +5,12 @@ Docker-isolated GNU C++14 judge. Players explore a branching quest map, write co
 in a self-hosted Monaco editor, run samples, submit against hidden tests, and keep
 progress, drafts, and submission history in a verified account.
 
-The current build includes seven built-in missions from basic I/O through prefix
-sums, an interactive algorithm Codex, English/Simplified Chinese/Japanese UI,
-dynamic administrator-managed quests, editable map positions, discussions and
-solutions, role-based administration, and owner-level runtime controls.
+The current build includes 22 built-in missions from first C++ input through
+maximum flow, adaptive starting points for players with prior C++ or algorithm
+experience, animated quest prologues, an interactive algorithm Codex,
+English/Simplified Chinese/Japanese UI, dynamic administrator-managed quests,
+editable map positions, discussions and solutions, role-based administration,
+and owner-level runtime controls.
 
 The hosted preview is available at
 [algoquest.intqwq.chatgpt.site](https://algoquest.intqwq.chatgpt.site). The same
@@ -18,12 +20,13 @@ Compose stack supports Windows development and Raspberry Pi 5 deployment.
 
 | Area | Current behavior |
 |---|---|
-| Campaign | Seven built-in C++14 missions, prerequisite unlocking, XP totals, branching-ready map data, and support for database-backed custom quests |
+| Campaign | 22 built-in C++14 missions, adaptive recommended starting points, prerequisite unlocking, XP totals, branching-ready map data, and support for database-backed custom quests |
+| Learning journey | Registration records prior C++ and algorithm experience; every player receives the first-use site tutorial, while every quest has a skippable and replayable animated prologue |
 | Mission workbench | Lazy-loaded Monaco editor, local and cloud draft autosave, sample runs, hidden-test submissions, per-case verdicts, time and memory reporting |
 | Judge | Bounded in-memory queue, one active submission per player, configurable cooldown, compile cache, and one disposable Docker container per submission |
 | Accounts | Guest bootstrap, registration, email verification, login/logout, password reset, hashed bearer sessions, Resend email, and Cloudflare Turnstile |
 | Saves | PostgreSQL-backed progress, drafts, exact submitted source snapshots, durable terminal results, and explicit local-versus-cloud conflict resolution |
-| Editorial | Per-quest discussions and solutions; discussions require a submission, solutions require a clear, and player solutions enter moderation |
+| Editorial | Per-quest discussions and solutions with rich text, font controls, highlighted code blocks, links, lists, and KaTeX formulas; discussions require a submission, solutions require a clear, and player solutions enter moderation |
 | Administration | User management, quest create/edit/archive, hidden judge tests, draggable map layout, and editorial moderation |
 | Owner controls | Registration and Judge switches, maintenance message, submission cooldown, service statistics, runtime information, and Judge health |
 | Codex | Searchable and filterable algorithm reference with explanations, complexity, checklists, C++14 templates, and linked quests |
@@ -156,6 +159,9 @@ owner. Owner accounts cannot be modified through normal administrator actions.
   solutions start as `pending` and require administrator or owner moderation.
 - Administrators and owners may publish either kind directly.
 - Moderators may move pending posts to `published` or `rejected`.
+- New posts use a validated structured rich-text document. Legacy plain-text
+  posts remain readable. The server accepts only the editor's known nodes,
+  approved style values, and safe `http`, `https`, or `mailto` links.
 
 ## Local development
 

@@ -34,3 +34,4 @@ test("control deck is a manager-only top navigation tab", async () => {
   assert.match(page, /\{canManage && \(/);
   assert.doesNotMatch(account, /\[ \{copy\.controlDeck\} \]/);
 });
+

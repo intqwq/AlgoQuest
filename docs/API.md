@@ -116,11 +116,19 @@ Common status meanings:
   "email": "player@example.com",
   "emailVerified": true,
   "isGuest": false,
-  "role": "player"
+  "role": "player",
+  "learningProfile": {
+    "hasCppFoundation": true,
+    "hasAlgorithmFoundation": false,
+    "configured": true
+  },
+  "tutorialCompleted": false,
+  "recommendedQuestId": "sorting-ruins"
 }
 ```
 
 `role` is one of `player`, `admin`, or `owner`.
+`recommendedQuestId` is advisory: skipped introductory quests remain available.
 
 ## Endpoint index
 
@@ -145,7 +153,10 @@ Common status meanings:
 | Method | Path | Authorization | Purpose |
 |---|---|---|---|
 | `GET` | `/v1/me` | Session | Load current player |
-| `PUT` | `/v1/me/profile` | Session | Update display name |
+| `PUT` | `/v1/me/profile` | Session | Update display name and learning profile |
+| `PUT` | `/v1/me/learning/tutorial` | Playable account | Mark the first-use interface tutorial complete |
+| `GET` | `/v1/me/learning/stories` | Playable account | List completed quest prologues |
+| `PUT` | `/v1/me/learning/stories/:questId` | Playable account | Mark an accessible quest prologue complete |
 | `GET` | `/v1/me/progress` | Playable account | Load quest progress |
 | `PUT` | `/v1/me/progress/:questId` | Playable account | Save started/cleared state; clears require accepted submission |
 | `GET` | `/v1/me/save` | Playable account | Load canonical cloud save |
@@ -275,6 +286,8 @@ Request:
   "displayName": "INLINEINT",
   "email": "player@example.com",
   "password": "correct horse battery staple",
+  "hasCppFoundation": true,
+  "hasAlgorithmFoundation": false,
   "turnstileToken": "turnstile-response"
 }
 ```
@@ -405,7 +418,14 @@ Response `200`:
     "email": "player@example.com",
     "emailVerified": true,
     "isGuest": false,
-    "role": "player"
+    "role": "player",
+    "learningProfile": {
+      "hasCppFoundation": true,
+      "hasAlgorithmFoundation": false,
+      "configured": true
+    },
+    "tutorialCompleted": false,
+    "recommendedQuestId": "sorting-ruins"
   }
 }
 ```
@@ -416,11 +436,39 @@ Request:
 
 ```json
 {
-  "displayName": "NEW_NAME"
+  "displayName": "NEW_NAME",
+  "hasCppFoundation": true,
+  "hasAlgorithmFoundation": true
 }
 ```
 
 Response `200` returns the updated `player`.
+
+### `PUT /v1/me/learning/tutorial`
+
+Marks the mandatory first-use interface tutorial complete and returns the updated
+`player`. Repeated calls are idempotent.
+
+### `GET /v1/me/learning/stories`
+
+Returns the quest prologues completed by the current player:
+
+```json
+{
+  "stories": [
+    {
+      "questId": "signal-fire",
+      "completedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+### `PUT /v1/me/learning/stories/:questId`
+
+Marks an accessible quest's prologue complete and returns the stored `story`
+record. Unknown or inaccessible quests are rejected; repeated calls are
+idempotent.
 
 ### `GET /v1/me/progress`
 
@@ -660,7 +708,8 @@ Request:
 {
   "kind": "discussion",
   "title": "Why lower_bound works here",
-  "content": "The invariant is ..."
+  "contentFormat": "tiptap-json-v1",
+  "content": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"The invariant is ...\"}]}]}"
 }
 ```
 
@@ -668,7 +717,13 @@ Rules:
 
 - `kind` is `discussion` or `solution`;
 - title length after trimming must be at least 3 and is capped at 160 characters;
-- content length after trimming must be at least 10 and is capped at 60 KiB;
+- `contentFormat` is `tiptap-json-v1` for new rich posts or `plain` for
+  backward-compatible plain text;
+- visible text and LaTeX content must total at least 10 and at most 60 KiB;
+- rich documents are capped at 96 KiB serialized and may contain only the
+  server allowlist of headings, paragraphs, lists, quotes, links, text styles,
+  highlighted code blocks, and inline/block mathematics;
+- links are restricted to `http`, `https`, and `mailto`;
 - player discussion requires at least one submission for the quest;
 - player solution requires the quest to be cleared;
 - discussions and moderator-authored posts are published immediately;
@@ -684,6 +739,7 @@ Response `201`:
     "kind": "solution",
     "title": "First occurrence with lower_bound",
     "content": "...",
+    "contentFormat": "tiptap-json-v1",
     "status": "pending",
     "author": {
       "id": "uuid",
@@ -1042,7 +1098,7 @@ owned terminal results in PostgreSQL.
 | Draft source | 64 KiB |
 | Save-resolution request | 1 MiB |
 | Quest create/update request | 1 MiB |
-| Editorial create request | 80 KiB |
+| Editorial create request | 160 KiB request / 96 KiB serialized document |
 | Private Judge request | 4 MiB |
 | Submission source | 64 KiB |
 | Dynamic quest tests | 50 |

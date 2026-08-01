@@ -7,6 +7,18 @@ export type Player = {
   emailVerified: boolean;
   isGuest: boolean;
   role: "player" | "admin" | "owner";
+  learningProfile: {
+    hasCppFoundation: boolean;
+    hasAlgorithmFoundation: boolean;
+    configured: boolean;
+  };
+  tutorialCompleted: boolean;
+  recommendedQuestId: string;
+};
+
+export type QuestStoryProgress = {
+  questId: string;
+  completedAt: string;
 };
 
 type SessionResponse = {
@@ -49,6 +61,7 @@ export type AdminQuestRecord = {
 
 export type EditorialKind = "discussion" | "solution";
 export type EditorialStatus = "pending" | "published" | "rejected";
+export type EditorialContentFormat = "plain" | "tiptap-json-v1";
 
 export type EditorialPost = {
   id: string;
@@ -56,6 +69,7 @@ export type EditorialPost = {
   kind: EditorialKind;
   title: string;
   content: string;
+  contentFormat: EditorialContentFormat;
   status: EditorialStatus;
   author: {
     id: string;
@@ -425,7 +439,12 @@ export async function loadQuestEditorial(questId: string) {
 
 export async function createEditorialPost(
   questId: string,
-  input: { kind: EditorialKind; title: string; content: string },
+  input: {
+    kind: EditorialKind;
+    title: string;
+    content: string;
+    contentFormat: EditorialContentFormat;
+  },
 ) {
   const body = await adminJson<{ post: EditorialPost }>(
     `/editorial/quests/${encodeURIComponent(questId)}`,
@@ -514,6 +533,8 @@ export async function registerAccount(input: {
   email: string;
   password: string;
   turnstileToken: string;
+  hasCppFoundation: boolean;
+  hasAlgorithmFoundation: boolean;
 }) {
   await ensureSession();
   await authPost("/auth/register", input);
@@ -570,11 +591,15 @@ export async function resetPassword(input: {
   return storeSession(body as SessionResponse);
 }
 
-export async function updatePlayerProfile(displayName: string) {
+export async function updatePlayerProfile(input: {
+  displayName: string;
+  hasCppFoundation: boolean;
+  hasAlgorithmFoundation: boolean;
+}) {
   const response = await authenticatedFetch(apiUrl("/me/profile"), {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName }),
+    body: JSON.stringify(input),
   });
   const body = await parseAuthResponse(response);
   const player = (body as unknown as { player: Player }).player;
@@ -582,6 +607,41 @@ export async function updatePlayerProfile(displayName: string) {
     new CustomEvent("algoquest:session", { detail: player }),
   );
   return player;
+}
+
+export async function completeWebTutorial() {
+  const response = await authenticatedFetch(apiUrl("/me/learning/tutorial"), {
+    method: "PUT",
+  });
+  const body = await parseAuthResponse(response);
+  const player = (body as unknown as { player: Player }).player;
+  window.dispatchEvent(
+    new CustomEvent("algoquest:session", { detail: player }),
+  );
+  return player;
+}
+
+export async function loadQuestStoryProgress(): Promise<QuestStoryProgress[]> {
+  const response = await authenticatedFetch(apiUrl("/me/learning/stories"), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Story progress API returned HTTP ${response.status}.`);
+  }
+  const body = (await response.json()) as { stories: QuestStoryProgress[] };
+  return body.stories;
+}
+
+export async function completeQuestStory(questId: string) {
+  const response = await authenticatedFetch(
+    apiUrl(`/me/learning/stories/${encodeURIComponent(questId)}`),
+    { method: "PUT" },
+  );
+  if (!response.ok) {
+    throw new Error(`Story progress API returned HTTP ${response.status}.`);
+  }
+  const body = (await response.json()) as { story: QuestStoryProgress };
+  return body.story;
 }
 
 export async function logoutAccount() {

@@ -8,6 +8,11 @@ import {
   EditorialPost,
   loadQuestEditorial,
 } from "@/lib/api-client";
+import {
+  EditorialComposer,
+  EditorialRichText,
+  emptyEditorialDocument,
+} from "@/components/editorial-rich-text";
 import type { Locale } from "@/lib/i18n";
 import type { Quest } from "@/lib/quests";
 
@@ -31,6 +36,8 @@ const copies = {
     discussionHint: "Discussions publish immediately after the submission requirement is met.",
     solutionModerationHint: "Player solutions appear after an administrator or site owner approves them.",
     directHint: "Your role publishes immediately.",
+    documentTooLarge: "The document is too large.",
+    minimumContent: "Write at least 10 characters before publishing.",
   },
   "zh-CN": {
     title: "题解与讨论",
@@ -51,6 +58,8 @@ const copies = {
     discussionHint: "满足提交条件后，讨论会立即公开，无需审核。",
     solutionModerationHint: "普通玩家发布的题解需由管理员或站长审核后公开。",
     directHint: "你的身份可以直接发布。",
+    documentTooLarge: "文档体积过大，请精简内容。",
+    minimumContent: "正文至少需要 10 个字符。",
   },
   ja: {
     title: "解説とディスカッション",
@@ -71,6 +80,8 @@ const copies = {
     discussionHint: "提出条件を満たしたディスカッションは審査なしですぐ公開されます。",
     solutionModerationHint: "プレイヤーの解説は管理者またはサイトオーナーの承認後に公開されます。",
     directHint: "この権限ではすぐ公開されます。",
+    documentTooLarge: "文書サイズが大きすぎます。",
+    minimumContent: "本文を 10 文字以上入力してください。",
   },
 } as const;
 
@@ -98,7 +109,10 @@ export function EditorialPanel({
     directPublish: false,
   });
   const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
+  const [content, setContent] = useState(emptyEditorialDocument);
+  const [contentLength, setContentLength] = useState(0);
+  const [contentTooLarge, setContentTooLarge] = useState(false);
+  const [composerKey, setComposerKey] = useState(0);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -125,14 +139,25 @@ export function EditorialPanel({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canPost) return;
+    if (!canPost || contentLength < 10 || contentTooLarge) {
+      setMessage(contentTooLarge ? copy.documentTooLarge : copy.minimumContent);
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
-      const post = await createEditorialPost(quest.id, { kind, title, content });
+      const post = await createEditorialPost(quest.id, {
+        kind,
+        title,
+        content,
+        contentFormat: "tiptap-json-v1",
+      });
       setPosts((current) => [post, ...current.filter((item) => item.id !== post.id)]);
       setTitle("");
-      setContent("");
+      setContent(emptyEditorialDocument);
+      setContentLength(0);
+      setContentTooLarge(false);
+      setComposerKey((current) => current + 1);
       setMessage(
         post.status === "published"
           ? copy.publish
@@ -195,7 +220,10 @@ export function EditorialPanel({
                     )}
                   </div>
                   <h3>{post.title}</h3>
-                  <p>{post.content}</p>
+                  <EditorialRichText
+                    content={post.content}
+                    contentFormat={post.contentFormat}
+                  />
                   <div className="editorial-post__meta">
                     <strong>{post.author.displayName}</strong>
                     <time>{new Date(post.createdAt).toLocaleString()}</time>
@@ -226,18 +254,24 @@ export function EditorialPanel({
                 onChange={(event) => setTitle(event.target.value)}
               />
             </label>
-            <label>
-              {copy.content}
-              <textarea
-                value={content}
-                minLength={10}
-                maxLength={60 * 1024}
+            <div className="editorial-compose-field">
+              <span>{copy.content}</span>
+              <EditorialComposer
+                key={composerKey}
+                locale={locale}
                 disabled={!canPost || busy}
-                onChange={(event) => setContent(event.target.value)}
+                onChange={(nextContent, nextLength, tooLarge) => {
+                  setContent(nextContent);
+                  setContentLength(nextLength);
+                  setContentTooLarge(tooLarge);
+                }}
               />
-            </label>
+            </div>
             {message && <p className="editorial-message">{message}</p>}
-            <button type="submit" disabled={!canPost || busy}>
+            <button
+              type="submit"
+              disabled={!canPost || busy || contentLength < 10 || contentTooLarge}
+            >
               [ {kind === "discussion" || eligibility.directPublish
       ? copy.publish
       : copy.submitReview} ]

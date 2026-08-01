@@ -48,3 +48,4 @@ test("gateway re-resolves recreated Docker services", async () => {
   assert.match(nginx, /proxy_pass \$web_upstream/);
   assert.doesNotMatch(nginx, /proxy_pass \$\{API_UPSTREAM\}/);
 });
+

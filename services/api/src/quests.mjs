@@ -11,6 +11,16 @@ export const questPrerequisites = Object.freeze({
   "dijkstra-citadel": ["grid-rescue"],
   "union-forge": ["dijkstra-citadel"],
   "topological-crown": ["union-forge"],
+  "recursive-mirror": ["topological-crown"],
+  "greedy-caravan": ["recursive-mirror"],
+  "knapsack-forge": ["greedy-caravan"],
+  "lis-observatory": ["knapsack-forge"],
+  "mst-skybridge": ["lis-observatory"],
+  "fenwick-pulse": ["mst-skybridge"],
+  "segment-bastion": ["fenwick-pulse"],
+  "lca-oracle": ["segment-bastion"],
+  "scc-nexus": ["lca-oracle"],
+  "maxflow-reactor": ["scc-nexus"],
 });
 
 export function missingPrerequisites(questId, progress) {
