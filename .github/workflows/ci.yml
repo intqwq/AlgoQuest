@@ -1,13 +1,23 @@
-name: CI
+name: Required CI
 
 on:
   push:
     branches: ["main"]
   pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: required-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  validate:
+  required-ci:
+    name: required-ci
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +29,10 @@ jobs:
       - name: Install web dependencies
         run: npm ci
 
-      - name: Build and test web
-        run: npm test
+      - name: Lint, build and test Web
+        run: |
+          npm run lint
+          npm test
 
       - name: Install and test Core API
         run: |
