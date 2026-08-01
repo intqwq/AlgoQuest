@@ -1112,3 +1112,57 @@ submission merely because status polling failed; continue polling the same ID.
 
 The Web client currently retries transient API calls up to three attempts and uses
 the Judge-provided `pollAfterMs` for submission polling.
+
+## Reliability hardening contracts
+
+### Human-verification failures
+
+Account endpoints keep the existing outer error contract:
+
+- `400 HUMAN_VERIFICATION_FAILED` for a missing, expired, rejected, action-mismatched,
+  or hostname-mismatched token.
+- `503 HUMAN_VERIFICATION_UNAVAILABLE` for configuration, timeout, transport,
+  upstream, malformed-response, or provider-internal failures.
+
+The JSON body additionally includes:
+
+```json
+{
+  "error": "HUMAN_VERIFICATION_UNAVAILABLE",
+  "reason": "TURNSTILE_TIMEOUT",
+  "retryable": true,
+  "resetWidget": false,
+  "attempts": 3,
+  "retryAfterMs": 1000
+}
+```
+
+`reason` may be `TURNSTILE_TOKEN_REQUIRED`, `TURNSTILE_TOKEN_EXPIRED`,
+`TURNSTILE_REJECTED`, `TURNSTILE_ACTION_MISMATCH`,
+`TURNSTILE_HOSTNAME_MISMATCH`, `TURNSTILE_TIMEOUT`,
+`TURNSTILE_NETWORK_ERROR`, `TURNSTILE_UPSTREAM_ERROR`,
+`TURNSTILE_INVALID_RESPONSE`, `TURNSTILE_UNAVAILABLE`,
+`TURNSTILE_NOT_CONFIGURED`, or `TURNSTILE_MISCONFIGURED`. When `retryAfterMs` is
+present, the API also sends `Retry-After` rounded up to whole seconds.
+
+Siteverify applies a four-second deadline per attempt. It retries only transient
+network/provider failures, at most three attempts, with bounded exponential
+backoff and one UUID `idempotency_key` reused across the attempts. Permanent token
+or policy failures are not retried with the same token.
+
+### Private Judge manifest transport
+
+The Core API still sends trusted quest data only over the token-protected private
+Judge API. The Judge serializes the validated manifest into the disposable
+runner's stdin. No `manifest.json` is created. The root supervisor consumes the
+bounded payload once, seals fd 0 to `/dev/null`, and launches each contestant case
+as UID/GID `10001` with only that case's input.
+
+The contestant-visible `/submission` bind mount is read-only and contains only
+`main.cpp` plus an optional read-only cached binary. Fresh binaries remain in the
+private `/work` tmpfs until the container stops; optional cache export happens
+thereafter with `docker cp`. Public results never include hidden expected or
+received output.
+
+The required Docker integration matrix covers `AC`, `CE`, `WA`, `TLE`, `RE`,
+`MLE`, and `OLE` and asserts a single container start for every submission.
