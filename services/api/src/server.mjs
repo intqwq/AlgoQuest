@@ -23,6 +23,7 @@ import {
 import { missingPrerequisites, questPrerequisites } from "./quests.mjs";
 import {
   createTurnstileVerifier,
+  turnstileFailureResponse,
   turnstileTestSecretKey,
   turnstileTestSiteKey,
 } from "./security.mjs";
@@ -138,11 +139,8 @@ async function requireHuman(request, body, action) {
     action,
   });
   if (!verification.ok) {
-    const unavailable = verification.code === "TURNSTILE_UNAVAILABLE";
-    throw new ApiError(
-      unavailable ? 503 : 400,
-      unavailable ? "HUMAN_VERIFICATION_UNAVAILABLE" : "HUMAN_VERIFICATION_FAILED",
-    );
+    const failure = turnstileFailureResponse(verification);
+    throw new ApiError(failure.status, failure.code, failure.details);
   }
 }
 
@@ -1271,10 +1269,21 @@ const server = http.createServer(async (request, response) => {
     return json(response, 404, { error: "NOT_FOUND" });
   } catch (error) {
     if (error instanceof ApiError) {
-      return json(response, error.status, {
-        error: error.code,
-        ...error.details,
-      });
+      const headers = {};
+      if (Number.isFinite(error.details.retryAfterMs)) {
+        headers["retry-after"] = String(
+          Math.max(1, Math.ceil(error.details.retryAfterMs / 1000)),
+        );
+      }
+      return json(
+        response,
+        error.status,
+        {
+          error: error.code,
+          ...error.details,
+        },
+        headers,
+      );
     }
     console.error("Core API request failed:", error.message);
     return json(response, 500, { error: "INTERNAL_ERROR" });
