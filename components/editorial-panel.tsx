@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   createEditorialPost,
   EditorialEligibility,
@@ -225,7 +226,7 @@ export function EditorialPanel({
                     contentFormat={post.contentFormat}
                   />
                   <div className="editorial-post__meta">
-                    <strong>{post.author.displayName}</strong>
+                    {post.author.handle ? <Link className="profile-link" href={`/player/${post.author.handle}`}>@{post.author.handle}</Link> : <strong>{post.author.displayName}</strong>}
                     <time>{new Date(post.createdAt).toLocaleString()}</time>
                   </div>
                 </article>

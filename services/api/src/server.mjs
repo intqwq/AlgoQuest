@@ -31,6 +31,10 @@ import {
   handlePublicOjRoutes,
 } from "./routes/oj-routes.mjs";
 import { handleAuthRoutes } from "./routes/auth-routes.mjs";
+import {
+  handlePlayerCommunityRoutes,
+  handlePublicCommunityRoutes,
+} from "./routes/community-routes.mjs";
 import { missingPrerequisites, questPrerequisites } from "./quests.mjs";
 import {
   createTurnstileVerifier,
@@ -536,6 +540,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (
+      await handlePublicCommunityRoutes({
+        request, response, url, database, json, ApiError, boundedText, authenticate,
+      })
+    ) {
+      return;
+    }
+
     await handleAuthRoutes({
       request, response, url, database, json, turnstileSiteKey, emailService,
       applyAuthRateLimit, readJson, ApiError, validateAccountInput, requireHuman,
@@ -563,6 +575,15 @@ const server = http.createServer(async (request, response) => {
         requirePlayableAccount,
         validUuid,
         validatedOjProblem,
+      })
+    ) {
+      return;
+    }
+
+    if (
+      await handlePlayerCommunityRoutes({
+        request, response, url, database, player, json, ApiError, boundedText,
+        readJson, requirePlayableAccount,
       })
     ) {
       return;

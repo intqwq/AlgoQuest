@@ -988,7 +988,7 @@ export function AdminConsole({
                 {editorials.length ? editorials.map((post) => (
                   <article key={post.id} className="moderation-card">
                     <div>
-                      <span>{`${post.kind.toUpperCase()} // ${post.questId}`}</span>
+                      <span>{`${post.scope.toUpperCase()} // ${post.kind.toUpperCase()} // ${post.targetId}`}</span>
                       <strong className={`editorial-role editorial-role--${post.author.role}`}>
                         {`${post.author.role.toUpperCase()} // ${post.author.displayName}`}
                       </strong>

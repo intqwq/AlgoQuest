@@ -62,9 +62,13 @@ export function createSaveProgressQuery(userId, questId, status, score) {
 
 export function createEditorialListQuery({
   questId,
+  scope,
+  query = "",
   viewerId,
   includeModeration = false,
   status,
+  limit,
+  offset,
 } = {}) {
   const values = [];
   const conditions = [];
@@ -72,19 +76,42 @@ export function createEditorialListQuery({
     values.push(questId);
     conditions.push(`p.quest_id = $${values.length}`);
   }
+  if (scope) {
+    values.push(scope);
+    conditions.push(`p.scope = $${values.length}`);
+  }
+  if (query) {
+    values.push(query.trim().slice(0, 160));
+    conditions.push(
+      `(p.title ILIKE '%' || $${values.length} || '%' OR p.content ILIKE '%' || $${values.length} || '%')`,
+    );
+  }
   if (status) {
     values.push(status);
     conditions.push(`p.status = $${values.length}`);
   } else if (!includeModeration) {
-    values.push(viewerId);
-    conditions.push(
-      `(p.status = 'published' OR p.author_id = $${values.length})`,
-    );
+    if (viewerId) {
+      values.push(viewerId);
+      conditions.push(
+        `(p.status = 'published' OR p.author_id = $${values.length})`,
+      );
+    } else {
+      conditions.push("p.status = 'published'");
+    }
+  }
+  let paginationSql = "LIMIT 200";
+  if (limit !== undefined || offset !== undefined) {
+    values.push(Math.min(200, Math.max(1, Number(limit) || 30)));
+    const limitParameter = values.length;
+    values.push(Math.max(0, Number(offset) || 0));
+    const offsetParameter = values.length;
+    paginationSql = `LIMIT $${limitParameter}::integer OFFSET $${offsetParameter}::integer`;
   }
   return {
     text: `SELECT
        p.id,
        p.quest_id,
+       p.scope,
        p.kind,
        p.title,
        p.content,
@@ -95,14 +122,17 @@ export function createEditorialListQuery({
        p.moderated_at,
        u.id AS author_id,
        u.display_name AS author_name,
-       u.role AS author_role
+       u.role AS author_role,
+       CASE WHEN profile.is_public THEN profile.handle END AS author_handle,
+       COUNT(*) OVER()::integer AS total_count
      FROM editorial_posts p
      JOIN users u ON u.id = p.author_id
+     LEFT JOIN player_profiles profile ON profile.user_id = u.id
      ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
      ORDER BY
        CASE p.status WHEN 'pending' THEN 0 WHEN 'published' THEN 1 ELSE 2 END,
        p.created_at DESC
-     LIMIT 200`,
+     ${paginationSql}`,
     values,
   };
 }
@@ -1278,34 +1308,59 @@ export function createDatabase(databaseUrl) {
               WHERE user_id = $1
                 AND quest_id = $2
                 AND status = 'cleared'
-           ) AS has_cleared`,
+           ) AS has_cleared,
+           EXISTS (
+             SELECT 1
+               FROM submissions
+              WHERE user_id = $1
+                AND quest_id = $2
+                AND verdict = 'AC'
+           ) AS has_accepted`,
         [userId, questId],
       );
       return {
         hasSubmission: result.rows[0].has_submission,
         hasCleared: result.rows[0].has_cleared,
+        hasAccepted: result.rows[0].has_accepted,
       };
     },
 
-    async listEditorialPosts({
+    async listEditorialFeed({
       questId,
+      scope,
+      query: searchQuery,
       viewerId,
       includeModeration = false,
       status,
+      limit,
+      offset,
     } = {}) {
-      const query = createEditorialListQuery({
+      const sqlQuery = createEditorialListQuery({
         questId,
+        scope,
+        query: searchQuery,
         viewerId,
         includeModeration,
         status,
+        limit,
+        offset,
       });
-      const result = await pool.query(query.text, query.values);
-      return result.rows.map(mapEditorialPost);
+      const result = await pool.query(sqlQuery.text, sqlQuery.values);
+      return {
+        posts: result.rows.map(mapEditorialPost),
+        total: result.rows[0]?.total_count ?? 0,
+      };
+    },
+
+    async listEditorialPosts(options = {}) {
+      const { posts } = await this.listEditorialFeed(options);
+      return posts;
     },
 
     async createEditorialPost({
       id,
       questId,
+      scope = "quest",
       authorId,
       kind,
       title,
@@ -1315,18 +1370,19 @@ export function createDatabase(databaseUrl) {
     }) {
       const result = await pool.query(
         `INSERT INTO editorial_posts
-           (id, quest_id, author_id, kind, title, content, content_format, status,
+           (id, quest_id, author_id, scope, kind, title, content, content_format, status,
             moderated_by, moderated_at)
          VALUES
-           ($1, $2, $3::uuid, $4, $5, $6, $7::varchar(32), $8::varchar(16),
-            CASE WHEN $8::varchar(16) = 'published'::varchar(16) THEN $3::uuid END,
-            CASE WHEN $8::varchar(16) = 'published'::varchar(16) THEN now() END)
+           ($1, $2, $3::uuid, $4::varchar(16), $5, $6, $7, $8::varchar(32), $9::varchar(16),
+            CASE WHEN $9::varchar(16) = 'published'::varchar(16) THEN $3::uuid END,
+            CASE WHEN $9::varchar(16) = 'published'::varchar(16) THEN now() END)
          RETURNING id`,
-        [id, questId, authorId, kind, title, content, contentFormat, status],
+        [id, questId, authorId, scope, kind, title, content, contentFormat, status],
       );
       const posts = await this.listEditorialPosts({
         viewerId: authorId,
         includeModeration: true,
+        limit: 100,
       });
       return posts.find((post) => post.id === result.rows[0].id);
     },
@@ -1346,8 +1402,62 @@ export function createDatabase(databaseUrl) {
       const posts = await this.listEditorialPosts({
         viewerId: moderatorId,
         includeModeration: true,
+        limit: 100,
       });
       return posts.find((post) => post.id === postId);
+    },
+
+    async searchPublicPlayers({ query = "", limit = 24, offset = 0 } = {}) {
+      const result = await pool.query(
+        `SELECT
+           profile.handle,
+           profile.bio,
+           profile.created_at,
+           u.display_name,
+           (SELECT COUNT(*)::integer
+              FROM oj_problems problem
+             WHERE problem.author_id = u.id AND problem.status = 'published') AS oj_problem_count,
+           (SELECT COUNT(*)::integer
+              FROM editorial_posts post
+             WHERE post.author_id = u.id AND post.status = 'published'
+               AND post.kind = 'solution') AS solution_count,
+           (SELECT COUNT(*)::integer
+              FROM editorial_posts post
+             WHERE post.author_id = u.id AND post.status = 'published'
+               AND post.kind = 'discussion') AS discussion_count,
+           COUNT(*) OVER()::integer AS total_count
+         FROM player_profiles profile
+         JOIN users u ON u.id = profile.user_id
+        WHERE profile.is_public = true
+          AND (
+            $1::text = ''
+            OR profile.handle ILIKE '%' || $1::text || '%'
+            OR u.display_name ILIKE '%' || $1::text || '%'
+            OR profile.bio ILIKE '%' || $1::text || '%'
+          )
+        ORDER BY
+          (SELECT COUNT(*) FROM editorial_posts post
+            WHERE post.author_id = u.id AND post.status = 'published') DESC,
+          profile.handle ASC
+        LIMIT $2::integer OFFSET $3::integer`,
+        [
+          query.trim().slice(0, 120),
+          Math.min(60, Math.max(1, Number(limit) || 24)),
+          Math.max(0, Number(offset) || 0),
+        ],
+      );
+      return {
+        users: result.rows.map((row) => ({
+          handle: row.handle,
+          displayName: row.display_name,
+          bio: row.bio,
+          joinedAt: row.created_at?.toISOString?.() ?? row.created_at,
+          ojProblemCount: row.oj_problem_count,
+          solutionCount: row.solution_count,
+          discussionCount: row.discussion_count,
+        })),
+        total: result.rows[0]?.total_count ?? 0,
+      };
     },
 
     ...createOjRepository(pool),
@@ -1372,6 +1482,8 @@ function mapEditorialPost(row) {
   return {
     id: row.id,
     questId: row.quest_id,
+    scope: row.scope ?? "quest",
+    targetId: row.quest_id,
     kind: row.kind,
     title: row.title,
     content: row.content,
@@ -1381,6 +1493,7 @@ function mapEditorialPost(row) {
       id: row.author_id,
       displayName: row.author_name,
       role: row.author_role,
+      handle: row.author_handle ?? null,
     },
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

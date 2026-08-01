@@ -1,7 +1,9 @@
 "use client";
 
 import Editor from "@monaco-editor/react";
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { OjEditorial } from "@/components/oj-editorial";
 import {
   adminUpdateOjProblem,
   archiveOjProblem,
@@ -255,7 +257,7 @@ export function OjHub({
       .filter((category) => category.tags.length);
   }, [tagCategories, visibleTags]);
 
-  const openProblem = async (publicId: number) => {
+  const openProblem = useCallback(async (publicId: number) => {
     setLoading(true);
     try {
       setSelected(await loadOjProblem(publicId));
@@ -269,7 +271,15 @@ export function OjHub({
     } finally {
       setLoading(false);
     }
-  };
+  }, [c.loadError]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const requested = Number(new URLSearchParams(window.location.search).get("problem"));
+      if (Number.isInteger(requested) && requested > 0) void openProblem(requested);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [openProblem]);
 
   const applySearch = (event: FormEvent) => {
     event.preventDefault();
@@ -477,7 +487,7 @@ export function OjHub({
           <button className="oj-back" onClick={() => setView("index")}>← {c.back}</button>
           <article className="oj-statement">
             <header><div><span>OJ #{selected.publicId}</span><h2>{selected.title}</h2></div><Difficulty value={selected.difficulty} locale={locale} /></header>
-            <div className="oj-problem-meta"><span>{c.author}: <strong>{selected.author.displayName}</strong></span><span>{c.limits}: <strong>{selected.timeLimitMs} ms / {selected.memoryLimitMb} MB</strong></span><span>{c.acceptance}: <strong>{acceptance(selected)}</strong></span></div>
+            <div className="oj-problem-meta"><span>{c.author}: {selected.author.handle ? <Link className="profile-link" href={`/player/${selected.author.handle}`}>@{selected.author.handle}</Link> : <strong>{selected.author.displayName}</strong>}</span><span>{c.limits}: <strong>{selected.timeLimitMs} ms / {selected.memoryLimitMb} MB</strong></span><span>{c.acceptance}: <strong>{acceptance(selected)}</strong></span></div>
             <EditorialRichText
               content={selected.statement}
               contentFormat={selected.statementFormat ?? "plain"}
@@ -493,6 +503,7 @@ export function OjHub({
             <button className="oj-submit-code" disabled={judging} onClick={() => void judgeSolution()}>{canSubmit ? (judging && activeSample === undefined ? `[ ${judge?.status ?? "QUEUED"} ]` : `> ${c.submit}_`) : `[ ${c.login} ]`}</button>
           </section>
           {judge && <section className={`oj-result oj-result--${judge.verdict === "AC" ? "ac" : "other"}`}><header><span>{c.status}</span><strong>{judge.verdict ?? judge.status}</strong><span>{judge.score ?? 0}/100</span></header>{judge.compilerOutput && <div><h3>{c.compiler}</h3><pre>{judge.compilerOutput}</pre></div>}{judge.error && <div><h3>{c.stderr}</h3><pre>{judge.error}</pre></div>}<div><h3>{c.cases}</h3><div className="oj-case-grid">{judge.cases.map((item) => <details key={item.id} open={judge.cases.length === 1 && item.verdict !== "AC"}><summary><b>#{item.id}</b><em>{item.verdict}</em><small>{item.timeMs ?? 0} ms / {item.memoryKb ?? 0} KB</small></summary>{item.input !== undefined && <div><h4>{c.input}</h4><pre>{item.input}</pre></div>}{item.expected !== undefined && <div><h4>{c.expected}</h4><pre>{item.expected}</pre></div>}{item.received !== undefined && <div><h4>{c.received}</h4><pre>{item.received}</pre></div>}{item.stderr && <div><h4>{c.stderr}{item.exitCode !== undefined ? ` // EXIT ${item.exitCode}` : ""}{item.signal ? ` // SIGNAL ${item.signal}` : ""}</h4><pre>{item.stderr}</pre></div>}</details>)}</div></div></section>}
+          <OjEditorial publicId={selected.publicId} player={player} locale={locale} onLogin={onLogin} />
         </div>
       )}
 
