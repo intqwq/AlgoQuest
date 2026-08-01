@@ -1,0 +1,222 @@
+    handle: row.handle,
+    bio: row.bio,
+    isPublic: row.is_public,
+    showCode: row.show_code,
+    createdAt: asIso(row.created_at),
+    updatedAt: asIso(row.updated_at),
+  };
+}
+
+async function profileStatistics(userId) {
+  const metrics = await loadMetrics(userId);
+  const achievements = await syncAchievements(userId, metrics);
+  const recent = await pool.query(
+    `SELECT quest_id, best_score, cleared_at, updated_at
+       FROM quest_progress
+      WHERE user_id = $1 AND status = 'cleared'
+      ORDER BY COALESCE(cleared_at, updated_at) DESC
+      LIMIT 12`,
+    [userId],
+  );
+  return {
+    clearedCount: metrics.clearedCount,
+    submissionCount: metrics.submissionCount,
+    acceptedCount: metrics.acceptedCount,
+    acceptanceRate: metrics.acceptanceRate,
+    currentStreak: metrics.currentStreak,
+    longestStreak: metrics.longestStreak,
+    totalXp: metrics.totalXp,
+    achievements: achievements.filter((item) => item.unlocked),
+    recentClears: recent.rows.map((row) => ({
+      questId: row.quest_id,
+      bestScore: row.best_score,
+      clearedAt: asIso(row.cleared_at ?? row.updated_at),
+    })),
+  };
+}
+
+function submissionRow(row, includeSource = false) {
+  const item = {
+    id: row.id,
+    judgeSubmissionId: row.judge_submission_id,
+    questId: row.quest_id,
+    status: row.status,
+    verdict: row.verdict,
+    score: row.score ?? 0,
+    language: row.language,
+    mode: row.mode,
+    details: row.details ?? {},
+    createdAt: asIso(row.created_at),
+    updatedAt: asIso(row.updated_at),
+  };
+  if (includeSource) item.source = row.source_code;
+  return item;
+}
+
+function submissionFilters(url, userId) {
+  const values = [userId];
+  const conditions = [`user_id = $1`];
+  const add = (sql, value) => {
+    values.push(value);
+    conditions.push(sql.replace("?", `$${values.length}`));
+  };
+  const questId = url.searchParams.get("questId");
+  const verdict = url.searchParams.get("verdict");
+  const mode = url.searchParams.get("mode");
+  const language = url.searchParams.get("language");
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  if (questId && validSlug(questId)) add("quest_id = ?", questId);
+  if (verdict && /^[A-Z_]{1,24}$/.test(verdict)) add("verdict = ?", verdict);
+  if (mode && ["sample", "submit"].includes(mode)) add("mode = ?", mode);
+  if (language && /^[a-z0-9-]{1,24}$/.test(language)) add("language = ?", language);
+  if (from && !Number.isNaN(Date.parse(from))) add("created_at >= ?::timestamptz", from);
+  if (to && !Number.isNaN(Date.parse(to))) add("created_at <= ?::timestamptz", to);
+  return { values, where: conditions.join(" AND ") };
+}
+
+async function listSubmissions(url, player) {
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  const limit = Math.min(50, Math.max(5, Number(url.searchParams.get("limit")) || 20));
+  const filters = submissionFilters(url, player.id);
+  const offset = (page - 1) * limit;
+  const values = [...filters.values, limit, offset];
+  const list = await pool.query(
+    `SELECT
+       id, judge_submission_id, quest_id, status, verdict, score,
+       language, mode, details, created_at, updated_at
+     FROM submissions
+     WHERE ${filters.where}
+     ORDER BY created_at DESC
+     LIMIT $${values.length - 1}::integer
+     OFFSET $${values.length}::integer`,
+    values,
+  );
+  const [count, stats, trend] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::integer AS total FROM submissions WHERE ${filters.where}`, filters.values),
+    pool.query(
+      `SELECT
+         COUNT(*)::integer AS total,
+         COUNT(*) FILTER (WHERE verdict = 'AC')::integer AS accepted,
+         COALESCE(AVG(score), 0)::numeric(8,2) AS average_score,
+         COALESCE(AVG(
+           CASE
+             WHEN jsonb_typeof(details->'cases') = 'array'
+             THEN (
+               SELECT MAX(COALESCE((item->>'timeMs')::numeric, 0))
+                 FROM jsonb_array_elements(details->'cases') AS item
+             )
+           END
+         ), 0)::numeric(10,2) AS average_time_ms
+       FROM submissions
+       WHERE ${filters.where}`,
+      filters.values,
+    ),
+    pool.query(
+      `SELECT created_at::date AS day, COUNT(*)::integer AS total,
+              COUNT(*) FILTER (WHERE verdict = 'AC')::integer AS accepted
+         FROM submissions
+        WHERE user_id = $1 AND created_at >= current_date - 13
+        GROUP BY created_at::date
+        ORDER BY created_at::date`,
+      [player.id],
+    ),
+  ]);
+  const verdictRows = await pool.query(
+    `SELECT COALESCE(verdict, status) AS verdict, COUNT(*)::integer AS count
+       FROM submissions
+      WHERE ${filters.where}
+      GROUP BY COALESCE(verdict, status)`,
+    filters.values,
+  );
+  const stat = stats.rows[0];
+  return {
+    submissions: list.rows.map((row) => submissionRow(row)),
+    pagination: {
+      page,
+      limit,
+      total: count.rows[0]?.total ?? 0,
+      pages: Math.max(1, Math.ceil((count.rows[0]?.total ?? 0) / limit)),
+    },
+    statistics: {
+      total: stat.total,
+      accepted: stat.accepted,
+      acceptanceRate: stat.total ? Math.round((stat.accepted / stat.total) * 100) : 0,
+      averageScore: Number(stat.average_score),
+      averageTimeMs: Number(stat.average_time_ms),
+      verdictCounts: Object.fromEntries(verdictRows.rows.map((row) => [row.verdict, row.count])),
+      trend: trend.rows.map((row) => ({
+        day: dateKey(row.day),
+        total: row.total,
+        accepted: row.accepted,
+      })),
+    },
+  };
+}
+
+function coarseDiff(left, right) {
+  let prefix = 0;
+  while (prefix < left.length && prefix < right.length && left[prefix] === right[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < left.length - prefix &&
+    suffix < right.length - prefix &&
+    left[left.length - 1 - suffix] === right[right.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return [
+    ...left.slice(0, prefix).map((line) => ({ type: "equal", line })),
+    ...left.slice(prefix, left.length - suffix).map((line) => ({ type: "remove", line })),
+    ...right.slice(prefix, right.length - suffix).map((line) => ({ type: "add", line })),
+    ...left.slice(left.length - suffix).map((line) => ({ type: "equal", line })),
+  ];
+}
+
+export function diffLines(previousSource, currentSource) {
+  const left = String(previousSource ?? "").split("\n");
+  const right = String(currentSource ?? "").split("\n");
+  let operations;
+  if (left.length * right.length > 180_000) {
+    operations = coarseDiff(left, right);
+  } else {
+    const table = Array.from({ length: left.length + 1 }, () =>
+      new Uint16Array(right.length + 1),
+    );
+    for (let i = left.length - 1; i >= 0; i -= 1) {
+      for (let j = right.length - 1; j >= 0; j -= 1) {
+        table[i][j] =
+          left[i] === right[j]
+            ? table[i + 1][j + 1] + 1
+            : Math.max(table[i + 1][j], table[i][j + 1]);
+      }
+    }
+    operations = [];
+    let i = 0;
+    let j = 0;
+    while (i < left.length || j < right.length) {
+      if (i < left.length && j < right.length && left[i] === right[j]) {
+        operations.push({ type: "equal", line: left[i] });
+        i += 1;
+        j += 1;
+      } else if (j < right.length && (i === left.length || table[i][j + 1] >= table[i + 1][j])) {
+        operations.push({ type: "add", line: right[j] });
+        j += 1;
+      } else {
+        operations.push({ type: "remove", line: left[i] });
+        i += 1;
+      }
+    }
+  }
+  const summary = operations.reduce(
+    (accumulator, operation) => {
+      if (operation.type === "add") accumulator.added += 1;
+      if (operation.type === "remove") accumulator.removed += 1;
+      if (operation.type === "equal") accumulator.unchanged += 1;
+      return accumulator;
+    },
+    { added: 0, removed: 0, unchanged: 0 },
+  );
+
