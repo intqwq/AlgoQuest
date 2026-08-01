@@ -61,17 +61,18 @@ test("public OJ payload exposes samples but never hidden answers or std source",
 });
 
 test("OJ migration assigns public IDs only during approval", async () => {
-  const [migration, database, server] = await Promise.all([
+  const [migration, repository, routes, server] = await Promise.all([
     readFile(new URL("../migrations/100_oj_platform.sql", import.meta.url), "utf8"),
-    readFile(new URL("../src/database.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/repositories/oj-repository.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/routes/oj-routes.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/server.mjs", import.meta.url), "utf8"),
   ]);
   assert.match(migration, /public_id bigint UNIQUE/);
   assert.match(migration, /status = 'published' AND public_id IS NOT NULL/);
-  assert.match(database, /nextval\('oj_problem_public_id_seq'\)/);
-  assert.match(database, /status IN \('pending', 'rejected'\)/);
-  assert.match(server, /requireAdmin\(player\)[\s\S]*moderateOjProblem/);
+  assert.match(repository, /nextval\('oj_problem_public_id_seq'\)/);
+  assert.match(repository, /status IN \('pending', 'rejected'\)/);
+  assert.match(routes, /requireAdmin\(player\)[\s\S]*moderateOjProblem/);
   assert.match(server, /trustedQuest: trustedOjQuest\(problem\)/);
   assert.match(server, /!record\.questId\.startsWith\("oj-"\)/);
-  assert.match(server, /oj_problem_submit:user/);
+  assert.match(routes, /oj_problem_submit:user/);
 });

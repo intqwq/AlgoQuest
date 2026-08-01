@@ -10,17 +10,12 @@ services:
       JUDGE_QUEUE_CAPACITY: "1000"
       JUDGE_COOLDOWN_MS: "4000"
       JUDGE_RESULT_TTL_MS: "600000"
-      JUDGE_COMPILE_CACHE_ENTRIES: "256"
-      JUDGE_WORK_ROOT: "${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}"
-      JUDGE_CACHE_ROOT: "${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}"
+      JUDGE_JOB_TTL_MS: "86400000"
+      REDIS_URL: "redis://redis:6379"
       JUDGE_TRUST_PROXY: "true"
       JUDGE_ALLOWED_ORIGIN: "${JUDGE_ALLOWED_ORIGIN:-https://game.intqwq.com}"
     ports:
       - "127.0.0.1:8788:8788"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - "${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}:${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}"
-      - "${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}:${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}"
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777
@@ -32,3 +27,52 @@ services:
       timeout: 3s
       retries: 3
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./judge
+      dockerfile: Dockerfile.worker
+    environment:
+      JUDGE_RUNNER_IMAGE: "algoquest-runner:cpp14"
+      JUDGE_MAX_PARALLEL: "2"
+      JUDGE_QUEUE_CAPACITY: "1000"
+      JUDGE_COOLDOWN_MS: "4000"
+      JUDGE_RESULT_TTL_MS: "600000"
+      JUDGE_JOB_TTL_MS: "86400000"
+      JUDGE_COMPILE_CACHE_ENTRIES: "256"
+      JUDGE_WORK_ROOT: "${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}"
+      JUDGE_CACHE_ROOT: "${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}"
+      REDIS_URL: "redis://redis:6379"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}:${JUDGE_WORK_ROOT:-/var/lib/algoquest/judge-work}"
+      - "${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}:${JUDGE_CACHE_ROOT:-/var/lib/algoquest/judge-cache}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - judge-queue:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  judge-queue:

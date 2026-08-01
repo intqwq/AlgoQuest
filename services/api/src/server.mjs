@@ -21,12 +21,16 @@ import {
   upstreamFailure,
 } from "./judge-status.mjs";
 import {
-  oiAlgorithmTags,
   OjValidationError,
-  publicOjProblem,
   trustedOjQuest,
   validateOjProblem,
 } from "./oj.mjs";
+import {
+  handleAdminOjRoutes,
+  handlePlayerOjRoutes,
+  handlePublicOjRoutes,
+} from "./routes/oj-routes.mjs";
+import { handleAuthRoutes } from "./routes/auth-routes.mjs";
 import { missingPrerequisites, questPrerequisites } from "./quests.mjs";
 import {
   createTurnstileVerifier,
@@ -34,7 +38,15 @@ import {
   turnstileTestSecretKey,
   turnstileTestSiteKey,
 } from "./security.mjs";
-import { ensureQuestRuleAccess } from "./learning-extension.mjs";
+import {
+  ensureQuestRuleAccess,
+  handleLearningRequest,
+} from "./learning-router.mjs";
+import {
+  log,
+  observeRequest,
+  prometheusMetrics,
+} from "./observability.mjs";
 
 const port = Number(process.env.PORT ?? 8787);
 const databaseUrl =
@@ -364,12 +376,13 @@ function parseLocalDrafts(value) {
   });
 }
 
-function judgeHeaders(userId, contentType) {
+function judgeHeaders(userId, contentType, requestId) {
   const headers = {
     accept: "application/json",
     "x-real-ip": `player-${userId}`,
   };
   if (contentType) headers["content-type"] = contentType;
+  if (requestId) headers["x-request-id"] = requestId;
   if (judgeToken) headers.authorization = `Bearer ${judgeToken}`;
   return headers;
 }
@@ -440,6 +453,7 @@ async function resolveQuestAccess(questId, progress, player) {
 }
 
 const server = http.createServer(async (request, response) => {
+  observeRequest(request, response);
   const url = new URL(request.url ?? "/", "http://api.local");
 
   if (request.method === "OPTIONS") {
@@ -450,17 +464,16 @@ const server = http.createServer(async (request, response) => {
     const state = await health();
     return json(response, state.status === "ok" ? 200 : 503, state);
   }
+  if (request.method === "GET" && url.pathname === "/metrics") {
+    response.writeHead(200, {
+      "content-type": "text/plain; version=0.0.4; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    return response.end(prometheusMetrics());
+  }
 
   try {
-    if (request.method === "GET" && url.pathname === "/v1/auth/config") {
-      const settings = await database.getServerSettings();
-      return json(response, 200, {
-        turnstileSiteKey,
-        emailDelivery: emailService.mode === "resend" ? "resend" : "local-log",
-        registrationEnabled: settings.registrationEnabled,
-        maintenanceMessage: settings.maintenanceMessage,
-      });
-    }
+    if (await handleLearningRequest(request, response)) return;
 
     if (request.method === "GET" && url.pathname === "/v1/quests") {
       const [records, mapLayout] = await Promise.all([
@@ -478,206 +491,27 @@ const server = http.createServer(async (request, response) => {
       });
     }
 
-    if (request.method === "GET" && url.pathname === "/v1/oj/tags") {
-      return json(response, 200, { tags: oiAlgorithmTags });
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/oj/problems") {
-      const query = boundedText(url.searchParams.get("query"), 160);
-      const requestedDifficulty = Number(url.searchParams.get("difficulty"));
-      const difficulty = Number.isInteger(requestedDifficulty) && requestedDifficulty >= 1 && requestedDifficulty <= 10
-        ? requestedDifficulty
-        : undefined;
-      const tag = boundedText(url.searchParams.get("tag"), 80);
-      const page = Math.max(1, Math.round(Number(url.searchParams.get("page")) || 1));
-      const limit = Math.min(60, Math.max(1, Math.round(Number(url.searchParams.get("limit")) || 30)));
-      const result = await database.listPublishedOjProblems({
-        query,
-        difficulty,
-        tag,
-        limit,
-        offset: (page - 1) * limit,
-      });
-      return json(response, 200, {
-        problems: result.problems.map((problem) => publicOjProblem(problem, { includeStatement: false })),
-        total: result.total,
-        page,
-        limit,
-      });
-    }
-
-    const publicOjProblemMatch = url.pathname.match(/^\/v1\/oj\/problems\/(\d{1,12})$/);
-    if (request.method === "GET" && publicOjProblemMatch) {
-      const problem = await database.getPublishedOjProblem(Number(publicOjProblemMatch[1]));
-      if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_FOUND");
-      return json(response, 200, { problem: publicOjProblem(problem) });
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/sessions") {
-      await applyAuthRateLimit(request, "guest_session", undefined, 30, 3600);
-      const body = await readJson(request, 4 * 1024);
-      const session = await database.createSession(
-        cleanDisplayName(body.displayName),
-      );
-      return json(response, 201, sessionPayload(session));
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/auth/register") {
-      const body = await readJson(request, 12 * 1024);
-      const settings = await database.getServerSettings();
-      if (!settings.registrationEnabled) {
-        throw new ApiError(503, "REGISTRATION_DISABLED");
-      }
-      const input = validateAccountInput(body, {
-        password: true,
-        displayName: true,
-      });
-      await applyAuthRateLimit(request, "register", input.email, 5, 15 * 60);
-      await requireHuman(request, body, "register");
-      const currentPlayer = await authenticate(request);
-      const passwordHash = await hashPassword(body.password);
-      const registration = await database.registerAccount({
-        anonymousUserId: currentPlayer?.isGuest ? currentPlayer.id : undefined,
-        displayName: input.displayName,
-        email: input.email,
-        passwordHash,
-        hasCppFoundation: body.hasCppFoundation === true,
-        hasAlgorithmFoundation: body.hasAlgorithmFoundation === true,
-      });
-      const verification = registration.created
-        ? registration
-        : !registration.verified
-          ? await database.createVerificationToken(input.email)
-          : undefined;
-      if (verification) {
-        try {
-          await emailService.sendVerification({
-            email: verification.email,
-            displayName: verification.displayName,
-            token: verification.token,
-            idempotencyKey: verification.tokenHash.slice(0, 32),
-          });
-        } catch (error) {
-          console.error("Verification email delivery failed:", error.message);
-          throw new ApiError(502, "EMAIL_DELIVERY_FAILED");
-        }
-      }
-      return json(response, 202, { status: "VERIFICATION_SENT" });
-    }
-
     if (
-      request.method === "POST" &&
-      url.pathname === "/v1/auth/resend-verification"
-    ) {
-      const body = await readJson(request, 8 * 1024);
-      const { email } = validateAccountInput(body, { password: false });
-      await applyAuthRateLimit(
+      await handlePublicOjRoutes({
         request,
-        "resend_verification",
-        email,
-        3,
-        30 * 60,
-      );
-      await requireHuman(request, body, "resend_verification");
-      const verification = await database.createVerificationToken(email);
-      if (verification) {
-        try {
-          await emailService.sendVerification({
-            ...verification,
-            idempotencyKey: verification.tokenHash.slice(0, 32),
-          });
-        } catch (error) {
-          console.error("Verification email delivery failed:", error.message);
-          throw new ApiError(502, "EMAIL_DELIVERY_FAILED");
-        }
-      }
-      return json(response, 202, { status: "VERIFICATION_SENT" });
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/auth/verify-email") {
-      const body = await readJson(request, 4 * 1024);
-      if (
-        typeof body.token !== "string" ||
-        !/^[A-Za-z0-9_-]{40,}$/.test(body.token)
-      ) {
-        throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN");
-      }
-      let session = await database.verifyEmail(body.token);
-      if (!session) throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN");
-      const owner = await database.ensureSiteOwner(siteOwnerEmail);
-      if (owner?.id === session.player.id) {
-        session = { ...session, player: owner };
-      }
-      return json(response, 200, sessionPayload(session));
-    }
-
-    if (request.method === "POST" && url.pathname === "/v1/auth/login") {
-      const body = await readJson(request, 8 * 1024);
-      const { email } = validateAccountInput(body, { password: true });
-      await applyAuthRateLimit(request, "login", email, 10, 15 * 60);
-      await requireHuman(request, body, "login");
-      const account = await database.findAccountForLogin(email);
-      const validPassword = account
-        ? await verifyPassword(body.password, account.passwordHash)
-        : (await hashPassword(body.password), false);
-      if (!account || !validPassword) {
-        throw new ApiError(401, "INVALID_CREDENTIALS");
-      }
-      if (!account.emailVerified) {
-        throw new ApiError(403, "EMAIL_NOT_VERIFIED");
-      }
-      await database.ensureSiteOwner(siteOwnerEmail);
-      const session = await database.loginAccount(account.id);
-      return json(response, 200, sessionPayload(session));
-    }
-
-    if (
-      request.method === "POST" &&
-      url.pathname === "/v1/auth/forgot-password"
+        response,
+        url,
+        database,
+        json,
+        ApiError,
+        boundedText,
+      })
     ) {
-      const body = await readJson(request, 8 * 1024);
-      const { email } = validateAccountInput(body, { password: false });
-      await applyAuthRateLimit(
-        request,
-        "forgot_password",
-        email,
-        4,
-        30 * 60,
-      );
-      await requireHuman(request, body, "forgot_password");
-      const reset = await database.createPasswordResetToken(email);
-      if (reset) {
-        try {
-          await emailService.sendPasswordReset({
-            ...reset,
-            idempotencyKey: reset.tokenHash.slice(0, 32),
-          });
-        } catch (error) {
-          console.error("Password reset email delivery failed:", error.message);
-          throw new ApiError(502, "EMAIL_DELIVERY_FAILED");
-        }
-      }
-      return json(response, 202, { status: "RESET_SENT" });
+      return;
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/auth/reset-password") {
-      const body = await readJson(request, 8 * 1024);
-      const policyError = passwordPolicyError(body.password);
-      if (policyError) throw new ApiError(400, policyError);
-      if (
-        typeof body.token !== "string" ||
-        !/^[A-Za-z0-9_-]{40,}$/.test(body.token)
-      ) {
-        throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN");
-      }
-      await applyAuthRateLimit(request, "reset_password", undefined, 5, 30 * 60);
-      await requireHuman(request, body, "reset_password");
-      const passwordHash = await hashPassword(body.password);
-      const session = await database.resetPassword(body.token, passwordHash);
-      if (!session) throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN");
-      return json(response, 200, sessionPayload(session));
-    }
-
+    await handleAuthRoutes({
+      request, response, url, database, json, turnstileSiteKey, emailService,
+      applyAuthRateLimit, readJson, ApiError, validateAccountInput, requireHuman,
+      authenticate, hashPassword, siteOwnerEmail, verifyPassword,
+      passwordPolicyError, sessionPayload, cleanDisplayName,
+    });
+    if (response.writableEnded) return;
     const player = await authenticate(request);
     if (!player) return json(response, 401, { error: "UNAUTHORIZED" });
 
@@ -685,47 +519,22 @@ const server = http.createServer(async (request, response) => {
       return json(response, 200, { player });
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/oj/problems") {
-      requirePlayableAccount(player);
-      const allowed = await database.consumeRateLimit(
-        "oj_problem_submit:user",
-        player.id,
-        10,
-        60 * 60,
-      );
-      if (!allowed) throw new ApiError(429, "OJ_SUBMISSION_RATE_LIMITED", { retryAfterMs: 60 * 60 * 1000 });
-      const body = await readJson(request, 8 * 1024 * 1024);
-      return json(response, 201, {
-        problem: await database.createOjProblem(player.id, validatedOjProblem(body)),
-      });
-    }
-
-    if (request.method === "GET" && url.pathname === "/v1/oj/mine") {
-      requirePlayableAccount(player);
-      return json(response, 200, {
-        problems: await database.listAuthorOjProblems(player.id),
-      });
-    }
-
-    const ojDraftMatch = url.pathname.match(/^\/v1\/oj\/drafts\/([0-9a-f-]{36})$/i);
-    if (request.method === "PUT" && ojDraftMatch) {
-      requirePlayableAccount(player);
-      if (!validUuid(ojDraftMatch[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
-      const allowed = await database.consumeRateLimit(
-        "oj_problem_resubmit:user",
-        player.id,
-        20,
-        60 * 60,
-      );
-      if (!allowed) throw new ApiError(429, "OJ_SUBMISSION_RATE_LIMITED", { retryAfterMs: 60 * 60 * 1000 });
-      const body = await readJson(request, 8 * 1024 * 1024);
-      const problem = await database.updateOjProblemDraft(
-        ojDraftMatch[1],
-        player.id,
-        validatedOjProblem(body),
-      );
-      if (!problem) throw new ApiError(404, "OJ_DRAFT_NOT_FOUND");
-      return json(response, 200, { problem });
+    if (
+      await handlePlayerOjRoutes({
+        request,
+        response,
+        url,
+        database,
+        player,
+        json,
+        ApiError,
+        readJson,
+        requirePlayableAccount,
+        validUuid,
+        validatedOjProblem,
+      })
+    ) {
+      return;
     }
 
     const editorialQuestMatch = url.pathname.match(
@@ -877,37 +686,22 @@ const server = http.createServer(async (request, response) => {
       });
     }
 
-    if (request.method === "GET" && url.pathname === "/v1/admin/oj/problems") {
-      requireAdmin(player);
-      const requestedStatus = url.searchParams.get("status");
-      const status = ["pending", "published", "rejected"].includes(requestedStatus)
-        ? requestedStatus
-        : "pending";
-      return json(response, 200, {
-        problems: await database.listOjProblemsForModeration(status),
-      });
-    }
-
-    const ojModerationMatch = url.pathname.match(/^\/v1\/admin\/oj\/problems\/([0-9a-f-]{36})$/i);
-    if (request.method === "PATCH" && ojModerationMatch) {
-      requireAdmin(player);
-      if (!validUuid(ojModerationMatch[1])) throw new ApiError(400, "INVALID_OJ_DRAFT_ID");
-      const body = await readJson(request, 8 * 1024);
-      if (body.status !== "published" && body.status !== "rejected") {
-        throw new ApiError(400, "INVALID_OJ_REVIEW_STATUS");
-      }
-      const reviewNote = boundedText(body.reviewNote, 1000);
-      if (body.status === "rejected" && reviewNote.length < 3) {
-        throw new ApiError(400, "OJ_REJECTION_REASON_REQUIRED");
-      }
-      const problem = await database.moderateOjProblem(
-        ojModerationMatch[1],
-        body.status,
-        player.id,
-        reviewNote,
-      );
-      if (!problem) throw new ApiError(404, "OJ_PROBLEM_NOT_REVIEWABLE");
-      return json(response, 200, { problem });
+    if (
+      await handleAdminOjRoutes({
+        request,
+        response,
+        url,
+        database,
+        player,
+        json,
+        ApiError,
+        readJson,
+        requireAdmin,
+        validUuid,
+        boundedText,
+      })
+    ) {
+      return;
     }
 
     const editorialModerationMatch = url.pathname.match(
@@ -1308,7 +1102,7 @@ const server = http.createServer(async (request, response) => {
       }
       const upstream = await judgeRequest("/v1/submissions", {
         method: "POST",
-        headers: judgeHeaders(player.id, "application/json"),
+        headers: judgeHeaders(player.id, "application/json", request.requestId),
         body: JSON.stringify({
           ...body,
           trustedQuest: access.record?.judgeDefinition,
@@ -1355,7 +1149,7 @@ const server = http.createServer(async (request, response) => {
       const questId = `oj-${problem.publicId}`;
       const upstream = await judgeRequest("/v1/submissions", {
         method: "POST",
-        headers: judgeHeaders(player.id, "application/json"),
+        headers: judgeHeaders(player.id, "application/json", request.requestId),
         body: JSON.stringify({
           questId,
           source: body.source,
@@ -1397,7 +1191,10 @@ const server = http.createServer(async (request, response) => {
       try {
         upstream = await judgeRequest(
           `/v1/submissions/${submissionMatch[1]}`,
-          { headers: judgeHeaders(player.id), timeoutMs: 3_000 },
+          {
+            headers: judgeHeaders(player.id, undefined, request.requestId),
+            timeoutMs: 3_000,
+          },
         );
       } catch (error) {
         const cached = cachedTerminalSubmission(record);
@@ -1479,7 +1276,7 @@ const server = http.createServer(async (request, response) => {
         headers,
       );
     }
-    console.error("Core API request failed:", error.message);
+    log("error", "request_failed", { message: error.message });
     return json(response, 500, { error: "INTERNAL_ERROR" });
   }
 });
@@ -1494,7 +1291,7 @@ if (siteOwnerEmail && !bootstrappedOwner) {
   console.log("Site owner role is active.");
 }
 server.listen(port, "0.0.0.0", () => {
-  console.log(`AlgoQuest API listening on :${port}`);
+  log("info", "server_started", { port });
 });
 
 async function shutdown() {

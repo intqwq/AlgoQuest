@@ -30,10 +30,83 @@ test("the API loads learning routes on every startup path", async () => {
     read("services/api/package.json"),
     read("services/api/Dockerfile"),
   ]);
-  assert.match(server, /from "\.\/learning-extension\.mjs"/);
+  assert.match(server, /from "\.\/learning-router\.mjs"/);
+  assert.match(server, /handleLearningRequest\(request, response\)/);
   assert.equal(JSON.parse(packageJson).scripts.start, "node src/server.mjs");
   assert.match(dockerfile, /CMD \["node", "src\/server\.mjs"\]/);
   assert.match(server, /ensureQuestRuleAccess\(player\.id, body\.questId\)/);
+});
+
+test("Judge API is separated from the Docker-capable worker", async () => {
+  const [compose, apiImage, workerImage, queue] = await Promise.all([
+    read("compose.yml"),
+    read("judge/Dockerfile.service"),
+    read("judge/Dockerfile.worker"),
+    read("judge/src/redis-submission-queue.mjs"),
+  ]);
+  assert.doesNotMatch(apiImage, /docker\.io|docker\.sock/);
+  assert.match(workerImage, /docker\.io/);
+  assert.match(compose, /judge-worker:/);
+  assert.match(compose, /redis:/);
+  assert.match(queue, /CREATE_JOB_SCRIPT/);
+});
+
+test("Vinext is the only Web runtime and the unused D1 stack is absent", async () => {
+  const [packageJson, vite, worker] = await Promise.all([
+    read("package.json"),
+    read("vite.config.ts"),
+    read("worker/index.ts"),
+  ]);
+  const packageData = JSON.parse(packageJson);
+  assert.equal(packageData.scripts.dev.includes("vite"), true);
+  assert.equal(packageData.scripts.start.includes("vinext"), true);
+  assert.equal("drizzle-orm" in packageData.dependencies, false);
+  assert.equal("drizzle-kit" in packageData.devDependencies, false);
+  assert.equal("next" in packageData.dependencies, false);
+  assert.equal(await isMissing("drizzle.config.ts"), true);
+  assert.equal(await isMissing("db/index.ts"), true);
+  assert.match(vite, /vinext\(\)/);
+  assert.doesNotMatch(worker, /D1Database/);
+});
+
+test("route families and OJ persistence are explicit modules", async () => {
+  for (const path of [
+    "services/api/src/routes/auth-routes.mjs",
+    "services/api/src/routes/oj-routes.mjs",
+    "services/api/src/repositories/oj-repository.mjs",
+    "services/api/src/learning-router.mjs",
+  ]) {
+    assert.equal(await isMissing(path), false, path);
+  }
+  const learning = await read("services/api/src/learning-router.mjs");
+  assert.doesNotMatch(learning, /http\.createServer|data:text\/javascript|jsfrag/);
+});
+
+test("CI includes browser, PostgreSQL, Redis and security gates", async () => {
+  const [ci, codeql, dependabot] = await Promise.all([
+    read(".github/workflows/ci.yml"),
+    read(".github/workflows/codeql.yml"),
+    read(".github/dependabot.yml"),
+  ]);
+  assert.match(ci, /playwright/);
+  assert.match(ci, /TEST_DATABASE_URL/);
+  assert.match(ci, /TEST_REDIS_URL/);
+  assert.match(ci, /npm audit --omit=dev --audit-level=high/);
+  assert.match(codeql, /github\/codeql-action\/analyze@v3/);
+  assert.match(dependabot, /package-ecosystem: npm/);
+});
+
+test("private metrics and structured request logging are wired", async () => {
+  const [api, apiMetrics, judge, gateway] = await Promise.all([
+    read("services/api/src/server.mjs"),
+    read("services/api/src/observability.mjs"),
+    read("judge/src/observability.mjs"),
+    read("deploy/nginx/default.conf.template"),
+  ]);
+  assert.match(api, /url\.pathname === "\/metrics"/);
+  assert.match(apiMetrics, /x-request-id/);
+  assert.match(judge, /algoquest_judge_queue_depth/);
+  assert.match(gateway, /location = \/api\/metrics/);
 });
 
 test("migrations are serialized, checksummed and applied once", async () => {

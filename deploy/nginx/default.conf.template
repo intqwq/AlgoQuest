@@ -59,6 +59,11 @@ server {
         proxy_read_timeout 20s;
     }
 
+    # Metrics stay on the private service network for Prometheus scraping.
+    location = /api/metrics {
+        return 404;
+    }
+
     # Problem setters may upload up to 50 bounded test pairs plus a std source.
     # Every public read and code submission keeps the smaller server-wide limit.
     location ~ ^/api/v1/oj/(problems$|drafts/[0-9a-f-]{36}$) {

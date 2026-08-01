@@ -183,16 +183,21 @@ DELETE /v1/admin/codex/:id
 
 ## Runtime integration
 
-The Core API start command preloads `services/api/src/learning-extension.mjs`. The loader assembles the adjacent review-sized `.jsfrag` source modules, resolves `pg` and the existing authentication module to absolute module URLs, and installs its route interception before `src/server.mjs` creates the HTTP server.
+The Core API imports `services/api/src/learning-router.mjs` directly and calls
+its explicit request handler before the other route families. The learning
+module is normal reviewable ESM: there is no generated `.jsfrag` source,
+`data:` import, or `http.createServer` interception.
 
-The extension delegates every unrelated route to the existing Core API handler. Existing authentication, account, editorial, save, administration, and Judge-status behavior remains owned by `server.mjs`.
+The router returns `false` for unrelated requests. Authentication, account,
+editorial, save, administration, and Judge-status behavior remains owned by the
+other Core API routes.
 
 ## Deployment
 
 Rebuild/restart the Core API after merging so that:
 
 1. migration `099_learning_system.sql` runs,
-2. the preload start command is active,
+2. the explicit learning router is active,
 3. the Web image includes the Learning OS and public profile route.
 
 For Compose deployments, running the normal `all` deployment command is sufficient. Back up PostgreSQL before production schema changes.
@@ -201,7 +206,7 @@ For Compose deployments, running the normal `all` deployment command is sufficie
 
 The implementation adds:
 
-- `services/api/test/learning-extension.test.mjs` for streaks, rule composition, and line diff,
+- `services/api/test/learning-extension.test.mjs` for streaks, rule composition, line diff, and explicit routing,
 - `tests/learning-system.test.mjs` for the exposed Learning OS surfaces.
 
 The extension loader and exported pure functions were also executed directly under Node.js 22 during implementation, and the new TypeScript/TSX modules were statically checked with TypeScript 5.8.
