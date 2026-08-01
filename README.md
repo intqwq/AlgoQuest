@@ -38,7 +38,7 @@ The public application is split into four independently deployable services:
 
 | Service | Default port | Responsibility |
 |---|---:|---|
-| Gateway + Web | `8080` on Windows, `80` on Pi | Nginx origin, Vinext/React UI, same-origin `/api` proxy |
+| Gateway + Web | `8080` on Windows, `80` on manual Pi, loopback `8080` on tunneled Pi | Nginx origin, Vinext/React UI, same-origin `/api` proxy |
 | Core API | `8787` | Accounts, roles, saves, quests, editorial, administration, and Judge orchestration |
 | Judge | `8788` | Queueing, GNU C++14 compilation, isolated execution, result lifecycle |
 | PostgreSQL | `5432` | Users, sessions, progress, drafts, submissions, quest catalog, moderation, and settings |
@@ -83,21 +83,39 @@ local secrets.
 
 Full instructions: [Windows deployment](docs/DEPLOY_WINDOWS.md).
 
-## Raspberry Pi quick start
+## Raspberry Pi Ubuntu one-click deployment
 
-Requirements: 64-bit Linux, Docker Engine, Docker Compose v2, OpenSSL, and curl.
+Requirements: Raspberry Pi 5 with 64-bit Ubuntu, a Cloudflare-managed domain,
+and production Resend and Turnstile credentials.
+
+```bash
+git clone https://github.com/intqwq/AlgoQuest.git
+cd AlgoQuest
+sudo bash deploy/pi/bootstrap-ubuntu.sh
+```
+
+The bootstrap installs Docker Engine, Compose v2, the Dockerized Nginx gateway,
+and `cloudflared`; generates local database and Judge secrets; builds and smoke
+tests the complete stack; creates the `game.intqwq.com` DNS tunnel route; and
+enables the application and tunnel at boot. The first run prints one Cloudflare
+authorization URL for browser approval.
+
+For an already prepared Docker host, the lower-level deployment command remains
+available:
 
 ```bash
 chmod +x deploy/pi/*.sh
 ./deploy/pi/deploy.sh
 ```
 
-The Pi defaults to port `80`, Judge concurrency `2`, and named Docker volumes for
-PostgreSQL, Judge work files, and the compile cache.
+Manual Pi deployment defaults to port `80`; the one-click tunneled deployment
+uses loopback port `8080`. Both use Judge concurrency `2` and named Docker
+volumes for PostgreSQL, Judge work files, and the compile cache.
 
 ```bash
 ./deploy/pi/status.sh
-sudo ./deploy/pi/install-systemd.sh
+sudo systemctl status algoquest
+sudo systemctl status algoquest-cloudflared
 ```
 
 Full instructions: [Raspberry Pi deployment](docs/DEPLOY_RASPBERRY_PI.md).
