@@ -1,0 +1,215 @@
+  const checkpoints = Array.isArray(body.checkpoints)
+    ? body.checkpoints.slice(0, 16).map((item) => localized(item))
+    : [];
+  if (!checkpoints.length) checkpoints.push(localized("Explain the invariant before coding."));
+  return {
+    id,
+    category,
+    questId: validSlug(body.questId) ? body.questId : "signal-fire",
+    marker: boundedText(body.marker, 8, "++"),
+    title: localized(body.title, id),
+    summary: localized(body.summary),
+    explanation: localized(body.explanation),
+    checkpoints,
+    timeComplexity: boundedText(body.timeComplexity, 80, "O(?)"),
+    spaceComplexity: boundedText(body.spaceComplexity, 80, "O(?)"),
+    tags: Array.isArray(body.tags)
+      ? body.tags.map((tag) => boundedText(tag, 40)).filter(Boolean).slice(0, 20)
+      : [],
+    code: typeof body.code === "string" ? body.code.slice(0, 64 * 1024) : "",
+    published: body.published !== false,
+    sortOrder: Math.max(0, Math.min(999999, Math.round(Number(body.sortOrder) || 0))),
+  };
+}
+
+function codexRow(row) {
+  return {
+    id: row.id,
+    category: row.category,
+    questId: row.quest_id,
+    marker: row.marker,
+    title: row.title,
+    summary: row.summary,
+    explanation: row.explanation,
+    checkpoints: row.checkpoints,
+    timeComplexity: row.time_complexity,
+    spaceComplexity: row.space_complexity,
+    tags: row.tags,
+    code: row.code,
+    published: row.published,
+    sortOrder: row.sort_order,
+    createdAt: asIso(row.created_at),
+    updatedAt: asIso(row.updated_at),
+  };
+}
+
+async function personalizedQuestCatalog(request) {
+  const player = await authenticate(request);
+  const access = await unlockedQuestIdsFor(player);
+  const ruleIds = new Set(access.rules.filter((rule) => rule.enabled).map((rule) => rule.questId));
+  if (player && access.unlocked.has("nameless-room")) {
+    await pool.query(
+      `INSERT INTO quest_catalog
+         (id, public_definition, judge_definition, archived, created_by, updated_by)
+       VALUES ($1, $2::jsonb, $3::jsonb, false, $4, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        "nameless-room",
+        JSON.stringify(NAMELESS_ROOM),
+        JSON.stringify(NAMELESS_JUDGE),
+        player.id,
+      ],
+    );
+  }
+  const [records, layout] = await Promise.all([
+    pool.query(
+      `SELECT id, public_definition, archived
+         FROM quest_catalog
+        ORDER BY COALESCE((public_definition->>'sortOrder')::integer, 999999), id`,
+    ),
+    pool.query(`SELECT quest_id, x, y FROM quest_map_layout ORDER BY quest_id`),
+  ]);
+  const quests = records.rows
+    .filter((row) => !row.archived)
+    .map((row) => {
+      const definition = { ...row.public_definition };
+      if (!ruleIds.has(row.id)) return definition;
+      return access.unlocked.has(row.id)
+        ? { ...definition, status: "locked", prerequisites: [] }
+        : { ...definition, status: "secret" };
+    });
+  if (access.unlocked.has("nameless-room")) {
+    const existing = quests.findIndex((quest) => quest.id === "nameless-room");
+    if (existing >= 0) quests[existing] = { ...quests[existing], status: "locked", prerequisites: [] };
+    else quests.push(NAMELESS_ROOM);
+  }
+  return {
+    quests,
+    archivedQuestIds: records.rows.filter((row) => row.archived).map((row) => row.id),
+    mapLayout: Object.fromEntries(
+      layout.rows.map((row) => [row.quest_id, { x: Number(row.x), y: Number(row.y) }]),
+    ),
+    learning: {
+      authenticated: Boolean(player && !player.isGuest && player.emailVerified),
+      unlockedHiddenQuestIds: [...access.unlocked],
+    },
+  };
+}
+
+async function handleExtensionRoute(request, response) {
+  const url = new URL(request.url ?? "/", "http://api.local");
+
+  if (request.method === "GET" && url.pathname === "/v1/quests") {
+    sendJson(response, 200, await personalizedQuestCatalog(request));
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/codex") {
+    const result = await pool.query(
+      `SELECT * FROM codex_entries WHERE published = true ORDER BY sort_order, id`,
+    );
+    sendJson(response, 200, { entries: result.rows.map(codexRow) });
+    return true;
+  }
+
+  const publicProfileMatch = url.pathname.match(/^\/v1\/players\/([a-z0-9-]{3,32})$/);
+  if (request.method === "GET" && publicProfileMatch) {
+    const profile = await pool.query(
+      `SELECT p.*, u.display_name
+         FROM player_profiles p
+         JOIN users u ON u.id = p.user_id
+        WHERE p.handle = $1 AND p.is_public = true`,
+      [publicProfileMatch[1]],
+    );
+    if (!profile.rowCount) throw new ExtensionError(404, "PUBLIC_PROFILE_NOT_FOUND");
+    const row = profile.rows[0];
+    sendJson(response, 200, {
+      profile: {
+        handle: row.handle,
+        displayName: row.display_name,
+        bio: row.bio,
+        showCode: row.show_code,
+        joinedAt: asIso(row.created_at),
+      },
+      statistics: await profileStatistics(row.user_id),
+    });
+    return true;
+  }
+
+  if (!url.pathname.startsWith("/v1/learning") &&
+      !url.pathname.startsWith("/v1/achievements") &&
+      !url.pathname.startsWith("/v1/me/public-profile") &&
+      !url.pathname.startsWith("/v1/me/submissions") &&
+      !url.pathname.startsWith("/v1/admin/quest-drafts") &&
+      !url.pathname.startsWith("/v1/admin/unlock-rules") &&
+      !url.pathname.startsWith("/v1/admin/codex") &&
+      !url.pathname.match(/^\/v1\/admin\/quests\/[a-z0-9-]{1,96}\/versions/)) {
+    return false;
+  }
+
+  const player = await authenticate(request);
+  requirePlayer(player);
+
+  if (request.method === "GET" && url.pathname === "/v1/learning/dashboard") {
+    sendJson(response, 200, { dashboard: await learningDashboard(player) });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/learning/sessions") {
+    const body = await readJson(request, 8 * 1024);
+    const minutes = Math.max(1, Math.min(480, Math.round(Number(body.minutes) || 0)));
+    const kind = ["study", "practice", "review"].includes(body.kind)
+      ? body.kind
+      : "practice";
+    if (!minutes) throw new ExtensionError(400, "INVALID_SESSION_MINUTES");
+    const id = crypto.randomUUID();
+    const result = await pool.query(
+      `INSERT INTO learning_sessions(id, user_id, minutes, kind, note, started_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       RETURNING *`,
+      [id, player.id, minutes, kind, boundedText(body.note, 240)],
+    );
+    sendJson(response, 201, {
+      session: {
+        id,
+        minutes,
+        kind,
+        note: result.rows[0].note,
+        startedAt: asIso(result.rows[0].started_at),
+      },
+      dashboard: await learningDashboard(player),
+    });
+    return true;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/v1/learning/goal") {
+    const body = await readJson(request, 8 * 1024);
+    const dailyMinutes = Math.max(5, Math.min(480, Math.round(Number(body.dailyMinutes) || 30)));
+    const weeklyQuestTarget = Math.max(
+      1,
+      Math.min(50, Math.round(Number(body.weeklyQuestTarget) || 3)),
+    );
+    const result = await pool.query(
+      `INSERT INTO learning_goals(user_id, daily_minutes, weekly_quest_target, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         daily_minutes = EXCLUDED.daily_minutes,
+         weekly_quest_target = EXCLUDED.weekly_quest_target,
+         updated_at = now()
+       RETURNING *`,
+      [player.id, dailyMinutes, weeklyQuestTarget],
+    );
+    const row = result.rows[0];
+    sendJson(response, 200, {
+      goal: {
+        dailyMinutes: row.daily_minutes,
+        weeklyQuestTarget: row.weekly_quest_target,
+        updatedAt: asIso(row.updated_at),
+      },
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/achievements") {
+    const { unlocked, metrics } = await unlockedQuestIdsFor(player);
+
