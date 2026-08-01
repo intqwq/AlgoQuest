@@ -1,6 +1,9 @@
 name: Apply codebase cleanup
 
 on:
+  push:
+    branches:
+      - cleanup-runner
   pull_request:
     branches:
       - main
@@ -20,6 +23,7 @@ permissions:
 jobs:
   apply:
     if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/cleanup-runner') ||
       (github.event_name == 'pull_request' && github.head_ref == 'agent/codebase-cleanup-20260802') ||
       (github.event_name == 'issue_comment' && github.event.issue.number == 18 && github.event.comment.body == '/apply-cleanup')
     runs-on: ubuntu-latest
