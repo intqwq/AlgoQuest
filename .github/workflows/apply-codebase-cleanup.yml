@@ -10,13 +10,18 @@ on:
       - reopened
       - ready_for_review
       - edited
+  issue_comment:
+    types:
+      - created
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: ${{ github.head_ref == 'agent/codebase-cleanup-20260802' }}
+    if: >-
+      (github.event_name == 'pull_request' && github.head_ref == 'agent/codebase-cleanup-20260802') ||
+      (github.event_name == 'issue_comment' && github.event.issue.number == 18 && github.event.comment.body == '/apply-cleanup')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
