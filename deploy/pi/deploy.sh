@@ -104,7 +104,7 @@ if [[ "${mode}" == "all" || "${mode}" == "web" ]]; then
   echo "AlgoQuest is listening on http://$(hostname -I | awk '{print $1}')"
 fi
 
-if [[ "${mode}" == "all" && -t 0 && -t 1 ]]; then
+if [[ "${mode}" == "all" && "${ALGOQUEST_NO_CONSOLE:-0}" != "1" && -t 0 && -t 1 ]]; then
   if command -v node >/dev/null; then
     node scripts/ops-console.mjs --env-file .env.pi
   else
