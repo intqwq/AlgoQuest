@@ -38,17 +38,20 @@ test("the API loads learning routes on every startup path", async () => {
 });
 
 test("Judge API is separated from the Docker-capable worker", async () => {
-  const [compose, apiImage, workerImage, queue] = await Promise.all([
+  const [compose, apiImage, workerImage, queue, smoke] = await Promise.all([
     read("compose.yml"),
     read("judge/Dockerfile.service"),
     read("judge/Dockerfile.worker"),
     read("judge/src/redis-submission-queue.mjs"),
+    read("judge/scripts/smoke.mjs"),
   ]);
   assert.doesNotMatch(apiImage, /docker\.io|docker\.sock/);
   assert.match(workerImage, /docker\.io/);
   assert.match(compose, /judge-worker:/);
   assert.match(compose, /redis:/);
   assert.match(queue, /CREATE_JOB_SCRIPT/);
+  assert.doesNotMatch(smoke, /docker-runner/);
+  assert.match(smoke, /\/v1\/submissions/);
 });
 
 test("Vinext is the only Web runtime and the unused D1 stack is absent", async () => {
