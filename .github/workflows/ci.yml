@@ -94,6 +94,21 @@ jobs:
             -v "${PWD}/deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" \
             nginx:1.27-alpine nginx -t
 
+      - name: Validate generated Pi systemd unit
+        run: |
+          set -euo pipefail
+          cp .env.pi.example .env.pi
+          unit_file="$(mktemp --suffix=.service)"
+          cleanup() {
+            rm -f .env.pi
+            sudo rm -f "${unit_file}"
+          }
+          trap cleanup EXIT
+          sudo env \
+            ALGOQUEST_SYSTEMD_DRY_RUN=1 \
+            ALGOQUEST_SYSTEMD_UNIT_PATH="${unit_file}" \
+            bash deploy/pi/install-systemd.sh
+
       - name: Build and test isolated Judge runner
         run: |
           docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
