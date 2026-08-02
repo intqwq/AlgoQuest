@@ -27,6 +27,10 @@ operator_user="${ALGOQUEST_OPERATOR_USER:-${SUDO_USER:-root}}"
 
 [[ -f "${project_root}/compose.yml" ]] || die "Run the script from an AlgoQuest checkout."
 [[ -f "${example_env}" ]] || die "Missing ${example_env}."
+[[ "${domain}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] ||
+  die "ALGOQUEST_DOMAIN is not a valid DNS hostname: ${domain}"
+[[ "${web_port}" =~ ^[0-9]+$ ]] && ((web_port >= 1 && web_port <= 65535)) ||
+  die "ALGOQUEST_WEB_PORT must be between 1 and 65535."
 
 if ! getent passwd "${operator_user}" >/dev/null; then
   die "Operator user '${operator_user}' does not exist."
@@ -45,6 +49,9 @@ as_operator() {
 set_env() {
   local key="$1"
   local value="$2"
+  [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] ||
+    die "${key} must be a single-line value."
+
   local escaped="${value//\\/\\\\}"
   escaped="${escaped//&/\\&}"
   escaped="${escaped//|/\\|}"
@@ -58,7 +65,7 @@ set_env() {
 
 get_env() {
   local key="$1"
-  sed -n "s/^${key}=//p" "${env_file}" | tail -n 1
+  sed -n "s/^${key}=//p" "${env_file}" | tail -n 1 | tr -d '\r'
 }
 
 is_missing_secret() {
@@ -69,8 +76,10 @@ is_missing_secret() {
 require_value() {
   local key="$1"
   local label="$2"
-  local current="$(get_env "${key}")"
-  local supplied="${!key:-}"
+  local current
+  local supplied
+  current="$(get_env "${key}")"
+  supplied="${!key:-}"
 
   if [[ -n "${supplied}" ]]; then
     set_env "${key}" "${supplied}"
@@ -92,11 +101,33 @@ require_value() {
   set_env "${key}" "${value}"
 }
 
+require_email() {
+  local key="$1"
+  local label="$2"
+
+  while true; do
+    require_value "${key}" "${label}"
+    local value
+    value="$(get_env "${key}")"
+    if [[ "${value}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+      return
+    fi
+
+    if [[ ! -t 0 ]]; then
+      die "${key} is not a valid email address."
+    fi
+    printf '[AlgoQuest] %s is not a valid email address. Try again.\n' "${key}" >&2
+    set_env "${key}" ""
+  done
+}
+
 require_secret() {
   local key="$1"
   local label="$2"
-  local current="$(get_env "${key}")"
-  local supplied="${!key:-}"
+  local current
+  local supplied
+  current="$(get_env "${key}")"
+  supplied="${!key:-}"
 
   if [[ -n "${supplied}" ]]; then
     set_env "${key}" "${supplied}"
@@ -113,14 +144,17 @@ require_secret() {
 
   local value=""
   while is_missing_secret "${value}"; do
-    read -r -s -p "${label}: " value
-    printf '\n'
+    # These credentials are intentionally echoed so users can verify what they typed.
+    read -r -p "${label}: " value
   done
   set_env "${key}" "${value}"
 }
 
 source /etc/os-release
 [[ "${ID:-}" == "ubuntu" ]] || die "This bootstrap targets Ubuntu. Found '${ID:-unknown}'."
+ubuntu_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+[[ -n "${ubuntu_codename}" ]] || die "Could not determine the Ubuntu release codename."
+
 architecture="$(dpkg --print-architecture)"
 if [[ "${architecture}" != "arm64" ]]; then
   log "Warning: Raspberry Pi Ubuntu is normally arm64; detected ${architecture}."
@@ -133,13 +167,23 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
   log "Installing Docker Engine and Compose v2"
+
+  mapfile -t conflicting_packages < <(
+    dpkg-query -W -f='${binary:Package}\n' \
+      docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc \
+      2>/dev/null || true
+  )
+  if ((${#conflicting_packages[@]})); then
+    apt-get remove -y "${conflicting_packages[@]}"
+  fi
+
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   cat > /etc/apt/sources.list.d/docker.sources <<DOCKER_REPO
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
-Suites: ${VERSION_CODENAME}
+Suites: ${ubuntu_codename}
 Components: stable
 Architectures: ${architecture}
 Signed-By: /etc/apt/keyrings/docker.asc
@@ -148,6 +192,7 @@ DOCKER_REPO
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
+
 systemctl enable --now docker
 if [[ "${operator_user}" != "root" ]]; then
   usermod -aG docker "${operator_user}"
@@ -188,7 +233,7 @@ set_env AUTH_EMAIL_MODE resend
 require_secret RESEND_API_KEY "Resend API key"
 require_secret TURNSTILE_SITE_KEY "Cloudflare Turnstile site key"
 require_secret TURNSTILE_SECRET_KEY "Cloudflare Turnstile secret key"
-require_value SITE_OWNER_EMAIL "Site owner email"
+require_email SITE_OWNER_EMAIL "Site owner email"
 
 log "Building and starting AlgoQuest"
 cd "${project_root}"
@@ -196,7 +241,9 @@ chmod +x deploy/pi/*.sh
 ALGOQUEST_NO_CONSOLE=1 ./deploy/pi/deploy.sh all
 ./deploy/pi/install-systemd.sh >/dev/null
 
-curl -fsS "${origin_url}/healthz" >/dev/null || die "Nginx gateway health check failed at ${origin_url}/healthz."
+curl -fsS --retry 10 --retry-delay 2 --retry-connrefused \
+  "${origin_url}/healthz" >/dev/null ||
+  die "Nginx gateway health check failed at ${origin_url}/healthz."
 
 log "Configuring Cloudflare Tunnel '${tunnel_name}'"
 cloudflare_dir="${operator_home}/.cloudflared"
@@ -208,7 +255,7 @@ if [[ ! -f "${cloudflare_dir}/cert.pem" ]]; then
 fi
 
 find_tunnel_id() {
-  as_operator cloudflared tunnel list --output json 2>/dev/null | \
+  as_operator cloudflared tunnel list --output json 2>/dev/null |
     jq -r --arg name "${tunnel_name}" \
       '[.[] | select(.name == $name and ((.deletedAt // "") == ""))][0].id // empty'
 }
@@ -225,6 +272,7 @@ credentials_file="${cloudflare_dir}/${tunnel_id}.json"
 
 config_file="${cloudflare_dir}/algoquest.yml"
 tmp_config="$(mktemp)"
+trap 'rm -f "${tmp_config:-}"' EXIT
 cat > "${tmp_config}" <<CLOUDFLARED_CONFIG
 tunnel: ${tunnel_id}
 credentials-file: ${credentials_file}
@@ -235,8 +283,9 @@ ingress:
 CLOUDFLARED_CONFIG
 install -m 0600 -o "${operator_user}" -g "${operator_group}" "${tmp_config}" "${config_file}"
 rm -f "${tmp_config}"
+trap - EXIT
 
-as_operator cloudflared tunnel --config "${config_file}" ingress validate
+as_operator cloudflared --config "${config_file}" tunnel ingress validate
 as_operator cloudflared tunnel route dns --overwrite-dns "${tunnel_id}" "${domain}"
 
 cloudflared_path="$(command -v cloudflared)"
@@ -251,9 +300,10 @@ Wants=network-online.target
 Type=simple
 User=${operator_user}
 Group=${operator_group}
-ExecStart=${cloudflared_path} --no-autoupdate --config ${config_file} tunnel run ${tunnel_id}
+ExecStart=${cloudflared_path} --no-autoupdate --config "${config_file}" tunnel run "${tunnel_id}"
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -264,7 +314,9 @@ WantedBy=multi-user.target
 SYSTEMD_UNIT
 
 systemctl daemon-reload
-systemctl enable --now algoquest-cloudflared.service
+systemd-analyze verify /etc/systemd/system/algoquest-cloudflared.service
+systemctl enable algoquest-cloudflared.service
+systemctl restart algoquest-cloudflared.service
 systemctl is-active --quiet algoquest.service
 systemctl is-active --quiet algoquest-cloudflared.service
 
@@ -275,4 +327,3 @@ printf 'Tunnel ID:     %s\n' "${tunnel_id}"
 printf 'Stack status:  sudo systemctl status algoquest\n'
 printf 'Tunnel status: sudo systemctl status algoquest-cloudflared\n'
 printf 'Logs:          docker compose --env-file .env.pi logs -f\n'
-
