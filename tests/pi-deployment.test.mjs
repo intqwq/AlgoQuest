@@ -31,6 +31,10 @@ test("Pi service and status checks honor readiness and configured ports", async 
     read("compose.yml"),
   ]);
   assert.match(systemd, /--wait --wait-timeout \$\{wait_timeout\}/);
+  assert.match(systemd, /WorkingDirectory=\$\{project_root\}/);
+  assert.doesNotMatch(systemd, /WorkingDirectory="\$\{project_root\}"/);
+  assert.match(systemd, /systemd-analyze verify "\$\{unit_path\}"/);
+  assert.match(systemd, /ALGOQUEST_SYSTEMD_DRY_RUN/);
   assert.match(status, /get_env_value WEB_PORT 8080/);
   assert.match(status, /get_env_value API_PORT 8787/);
   assert.match(status, /get_env_value JUDGE_PORT 8788/);
