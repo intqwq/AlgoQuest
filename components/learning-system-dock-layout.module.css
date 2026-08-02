@@ -1,0 +1,36 @@
+.launcher,
+.shell {
+  transition: bottom 160ms ease, max-height 160ms ease;
+}
+
+/* Keep the global dock clear of the OJ and quest submission controls. */
+:global(body:has(.oj-submit-code)) .launcher,
+:global(body:has(.mission-actions)) .launcher {
+  bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+}
+
+:global(body:has(.oj-submit-code)) .shell,
+:global(body:has(.mission-actions)) .shell {
+  bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+  max-height: calc(100vh - 162px - env(safe-area-inset-bottom, 0px));
+}
+
+@media (max-width: 720px) {
+  :global(body:has(.oj-submit-code)) .launcher {
+    bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  }
+
+  :global(body:has(.oj-submit-code)) .shell {
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100vh - 140px - env(safe-area-inset-bottom, 0px));
+  }
+
+  :global(body:has(.mission-actions)) .launcher {
+    bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+  }
+
+  :global(body:has(.mission-actions)) .shell {
+    bottom: calc(176px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100vh - 188px - env(safe-area-inset-bottom, 0px));
+  }
+}
