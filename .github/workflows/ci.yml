@@ -85,6 +85,15 @@ jobs:
       - name: Validate Compose model
         run: docker compose --env-file .env.windows.example --profile all config --quiet
 
+      - name: Validate rendered Nginx gateway configuration
+        run: |
+          docker run --rm \
+            -e API_UPSTREAM=http://api:8787 \
+            -e WEB_UPSTREAM=http://web:3000 \
+            -e NGINX_ENVSUBST_FILTER='^(API_UPSTREAM|WEB_UPSTREAM)$' \
+            -v "${PWD}/deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            nginx:1.27-alpine nginx -t
+
       - name: Build and test isolated Judge runner
         run: |
           docker build -f judge/Dockerfile.runner -t algoquest-runner:cpp14 judge
