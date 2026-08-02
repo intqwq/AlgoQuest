@@ -6,6 +6,7 @@ import { AdminPanel } from "./learning-system/admin-panel";
 import { BadgesPanel, LearningPanel, ProfilePanel } from "./learning-system/learning-panel";
 import { SubmissionsPanel } from "./learning-system/submissions-panel";
 import type { CodexEntry, Dashboard, Player, PublicProfile } from "./learning-system/types";
+import dockLayoutStyles from "./learning-system-dock-layout.module.css";
 import styles from "./learning-system.module.css";
 
 type Tab = "learn" | "badges" | "profile" | "submissions" | "codex" | "admin";
@@ -51,11 +52,11 @@ export function LearningSystemDock() {
   }, [player?.role]);
 
   return <>
-    <button className={styles.launcher} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+    <button className={`${styles.launcher} ${dockLayoutStyles.launcher}`} type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
       <span>{dashboard ? `${dashboard.metrics.currentStreak}D` : "AQ"}</span>
       {open ? "CLOSE LEARNING OS" : "LEARNING OS"}
     </button>
-    {open && <aside className={styles.shell} aria-label="Continuous learning system">
+    {open && <aside className={`${styles.shell} ${dockLayoutStyles.shell}`} aria-label="Continuous learning system">
       <header className={styles.header}>
         <div><span className={styles.kicker}>ALGOQUEST LEARNING OS</span><h2>{player ? player.displayName : "ACCOUNT REQUIRED"}</h2></div>
         <div className={styles.headerActions}><button onClick={() => void load()}>REFRESH</button><button onClick={() => setOpen(false)}>×</button></div>
