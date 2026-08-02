@@ -24,9 +24,19 @@ web_port="${ALGOQUEST_WEB_PORT:-8080}"
 tunnel_name="${CLOUDFLARE_TUNNEL_NAME:-algoquest}"
 origin_url="http://127.0.0.1:${web_port}"
 operator_user="${ALGOQUEST_OPERATOR_USER:-${SUDO_USER:-root}}"
+tmp_config=""
+
+cleanup() {
+  [[ -z "${tmp_config}" ]] || rm -f "${tmp_config}"
+}
+trap cleanup EXIT
 
 [[ -f "${project_root}/compose.yml" ]] || die "Run the script from an AlgoQuest checkout."
 [[ -f "${example_env}" ]] || die "Missing ${example_env}."
+[[ "${domain}" =~ ^[A-Za-z0-9.-]+$ ]] || die "ALGOQUEST_DOMAIN contains unsupported characters."
+[[ "${web_port}" =~ ^[0-9]+$ ]] || die "ALGOQUEST_WEB_PORT must be an integer."
+(( web_port >= 1 && web_port <= 65535 )) || die "ALGOQUEST_WEB_PORT must be between 1 and 65535."
+[[ "${tunnel_name}" =~ ^[A-Za-z0-9_-]+$ ]] || die "CLOUDFLARE_TUNNEL_NAME contains unsupported characters."
 
 if ! getent passwd "${operator_user}" >/dev/null; then
   die "Operator user '${operator_user}' does not exist."
@@ -45,6 +55,9 @@ as_operator() {
 set_env() {
   local key="$1"
   local value="$2"
+  [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || \
+    die "${key} cannot contain a newline."
+
   local escaped="${value//\\/\\\\}"
   escaped="${escaped//&/\\&}"
   escaped="${escaped//|/\\|}"
@@ -113,8 +126,7 @@ require_secret() {
 
   local value=""
   while is_missing_secret "${value}"; do
-    read -r -s -p "${label}: " value
-    printf '\n'
+    read -r -p "${label}: " value
   done
   set_env "${key}" "${value}"
 }
@@ -131,8 +143,25 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   ca-certificates curl git gnupg jq openssl sudo
 
+available_kb="$(df --output=avail -k "${project_root}" | tail -n 1 | tr -d ' ')"
+if [[ "${available_kb}" =~ ^[0-9]+$ ]] && (( available_kb < 8 * 1024 * 1024 )); then
+  log "Warning: less than 8 GiB is free on the deployment filesystem. Docker builds may exhaust the disk."
+fi
+
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
   log "Installing Docker Engine and Compose v2"
+
+  conflicting_packages=()
+  for package in docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc; do
+    if dpkg-query -W -f='${db:Status-Abbrev}' "${package}" 2>/dev/null | grep -q '^ii '; then
+      conflicting_packages+=("${package}")
+    fi
+  done
+  if (( ${#conflicting_packages[@]} > 0 )); then
+    log "Removing Docker packages that conflict with Docker CE: ${conflicting_packages[*]}"
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y "${conflicting_packages[@]}"
+  fi
+
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
@@ -155,6 +184,8 @@ fi
 
 docker info >/dev/null
 docker compose version >/dev/null
+docker compose up --help 2>&1 | grep -q -- '--wait' || \
+  die "Docker Compose is too old. Install a version that supports 'compose up --wait'."
 
 if ! command -v cloudflared >/dev/null; then
   log "Installing cloudflared"
@@ -194,9 +225,10 @@ log "Building and starting AlgoQuest"
 cd "${project_root}"
 chmod +x deploy/pi/*.sh
 ALGOQUEST_NO_CONSOLE=1 ./deploy/pi/deploy.sh all
-./deploy/pi/install-systemd.sh >/dev/null
 
-curl -fsS "${origin_url}/healthz" >/dev/null || die "Nginx gateway health check failed at ${origin_url}/healthz."
+curl -fsS "${origin_url}/healthz" >/dev/null || \
+  die "Nginx gateway health check failed at ${origin_url}/healthz."
+./deploy/pi/install-systemd.sh >/dev/null
 
 log "Configuring Cloudflare Tunnel '${tunnel_name}'"
 cloudflare_dir="${operator_home}/.cloudflared"
@@ -235,6 +267,7 @@ ingress:
 CLOUDFLARED_CONFIG
 install -m 0600 -o "${operator_user}" -g "${operator_group}" "${tmp_config}" "${config_file}"
 rm -f "${tmp_config}"
+tmp_config=""
 
 as_operator cloudflared tunnel --config "${config_file}" ingress validate
 as_operator cloudflared tunnel route dns --overwrite-dns "${tunnel_id}" "${domain}"
@@ -275,4 +308,3 @@ printf 'Tunnel ID:     %s\n' "${tunnel_id}"
 printf 'Stack status:  sudo systemctl status algoquest\n'
 printf 'Tunnel status: sudo systemctl status algoquest-cloudflared\n'
 printf 'Logs:          docker compose --env-file .env.pi logs -f\n'
-
