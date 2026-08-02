@@ -37,3 +37,15 @@ test("Pi service and status checks honor readiness and configured ports", async 
   assert.doesNotMatch(compose, /\[200,503\]\.includes/);
   assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:8787\/health'\).*if\(!r\.ok\)/);
 });
+
+test("Nginx quotes regex locations that contain repetition braces", async () => {
+  const nginx = await read("deploy/nginx/default.conf.template");
+  assert.match(
+    nginx,
+    /location ~ "\^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\)" \{/,
+  );
+  assert.doesNotMatch(
+    nginx,
+    /location ~ \^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\) \{/,
+  );
+});
