@@ -376,8 +376,9 @@ Only the Gateway is intended for ordinary browser access.
 
 ### Raspberry Pi single-machine deployment
 
-The same images run on ARM64. Port `80` is the expected origin for Nginx, cpolar,
-or Cloudflare Tunnel. PostgreSQL, Judge work files, and the compile cache use named
+The same images run on ARM64. The production origin gateway binds to loopback
+port `18081`; the independent Bridge service owns public hostname routing and
+Cloudflare Tunnel. PostgreSQL, Judge work files, and the compile cache use named
 Docker volumes so sibling runner containers can access the required job data.
 
 ### Split hosts

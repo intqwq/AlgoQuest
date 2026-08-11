@@ -35,11 +35,23 @@ test("Pi service and status checks honor readiness and configured ports", async 
   assert.doesNotMatch(systemd, /WorkingDirectory="\$\{project_root\}"/);
   assert.match(systemd, /systemd-analyze verify "\$\{unit_path\}"/);
   assert.match(systemd, /ALGOQUEST_SYSTEMD_DRY_RUN/);
-  assert.match(status, /get_env_value WEB_PORT 8080/);
+  assert.match(status, /get_env_value WEB_PORT 18081/);
   assert.match(status, /get_env_value API_PORT 8787/);
   assert.match(status, /get_env_value JUDGE_PORT 8788/);
   assert.doesNotMatch(compose, /\[200,503\]\.includes/);
   assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:8787\/health'\).*if\(!r\.ok\)/);
+});
+
+test("Pi bootstrap leaves shared routing to Bridge", async () => {
+  const [bootstrap, env] = await Promise.all([
+    read("deploy/pi/bootstrap-ubuntu.sh"),
+    read(".env.pi.example"),
+  ]);
+  assert.match(bootstrap, /ALGOQUEST_WEB_PORT:-18081/);
+  assert.match(bootstrap, /github\.com\/intqwq\/Bridge/);
+  assert.doesNotMatch(bootstrap, /tunnel create|algoquest-cloudflared\.service/);
+  assert.match(env, /^WEB_BIND_ADDRESS=127\.0\.0\.1$/m);
+  assert.match(env, /^WEB_PORT=18081$/m);
 });
 
 test("Nginx quotes regex locations that contain repetition braces", async () => {

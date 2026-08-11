@@ -5,7 +5,6 @@
 - Raspberry Pi 5
 - 64-bit Ubuntu 24.04 or later
 - NVMe storage for Docker data when available
-- A Cloudflare account with `intqwq.com` active in Cloudflare DNS
 - Resend and Turnstile production credentials
 
 Keep the system, Docker, and Compose packages from one packaging source. Mixing
@@ -24,33 +23,28 @@ sudo bash deploy/pi/bootstrap-ubuntu.sh
 
 The script performs the complete production setup:
 
-1. Installs Docker Engine, Buildx, Docker Compose v2, and `cloudflared` from
-   their official APT repositories.
+1. Installs Docker Engine, Buildx, and Docker Compose v2 from the official APT
+   repository.
 2. Creates `.env.pi`, generates the PostgreSQL and Judge secrets, and prompts
    for Resend, Turnstile, and site-owner credentials.
-3. Binds the Dockerized Nginx gateway to `127.0.0.1:8080`, keeping the API,
+3. Binds the Dockerized Nginx origin gateway to `127.0.0.1:18081`, keeping the API,
    Judge, database, and origin gateway off the public LAN.
 4. Builds all ARM64 images and runs the isolated Judge and Core API smoke tests.
 5. Installs `algoquest.service` for the application stack.
-6. Opens the Cloudflare authorization flow, creates or reuses the `algoquest`
-   tunnel, routes `game.intqwq.com` to the local Nginx gateway, and installs
-   `algoquest-cloudflared.service`.
+6. Leaves public routing to the independent
+   [Bridge](https://github.com/intqwq/Bridge) deployment.
 
-The Cloudflare login requires one browser approval on the first run. Select the
-`intqwq.com` zone when Cloudflare asks which domain to authorize.
-
-To use another hostname or tunnel name:
+To use another hostname or private origin port:
 
 ```bash
 sudo env \
   ALGOQUEST_DOMAIN=game.intqwq.com \
-  CLOUDFLARE_TUNNEL_NAME=algoquest \
+  ALGOQUEST_WEB_PORT=18081 \
   bash deploy/pi/bootstrap-ubuntu.sh
 ```
 
 For a non-interactive environment setup, pass the required account values as
-environment variables. Cloudflare authorization is skipped automatically when
-the operator already has `~/.cloudflared/cert.pem`.
+environment variables.
 
 ```bash
 sudo env \
@@ -67,7 +61,7 @@ default.
 
 ## Manual first deployment
 
-Use this path when Docker and the tunnel are managed separately:
+Use this path when Docker is already managed:
 
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
@@ -99,13 +93,12 @@ docker compose --env-file .env.pi logs --tail 100 api judge
 
 ```bash
 sudo systemctl status algoquest
-sudo systemctl status algoquest-cloudflared
 docker compose --env-file .env.pi ps
 docker compose --env-file .env.pi logs -f
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:18081/healthz
 ```
 
-The public endpoint should become available at:
+After the Bridge deployment is also complete, the public endpoint is:
 
 ```text
 https://game.intqwq.com
@@ -122,36 +115,25 @@ sudo ./deploy/pi/install-systemd.sh
 
 The generated unit uses the repository's current absolute path, so the project
 does not have to live under a fixed directory. The one-click bootstrap installs
-both the application and Cloudflare Tunnel units automatically.
+only the application unit.
 
-## Publish through Cloudflare Tunnel manually
+## Publish through Bridge
 
-The one-click bootstrap configures a locally managed tunnel and writes:
-
-```text
-~/.cloudflared/algoquest.yml
-/etc/systemd/system/algoquest-cloudflared.service
-```
-
-Its ingress route is:
-
-```text
-game.intqwq.com -> http://127.0.0.1:8080
-```
-
-For a manual tunnel, point Cloudflare only at the configured `WEB_PORT` on
-`127.0.0.1`. Keep these values aligned in `.env.pi`:
+Bridge owns one Cloudflare Tunnel and one hostname-routing Nginx service for
+both websites. It reaches AlgoQuest through this private contract:
 
 ```dotenv
 WEB_BIND_ADDRESS=127.0.0.1
-WEB_PORT=8080
+WEB_PORT=18081
 API_ALLOWED_ORIGIN=https://game.intqwq.com
 PUBLIC_APP_URL=https://game.intqwq.com
 TURNSTILE_EXPECTED_HOSTNAME=game.intqwq.com
 ```
 
-TLS terminates at Cloudflare. Do not create public routes for ports `5432`,
-`8787`, `8788`, or the Docker socket.
+Do not expose `18081`, `5432`, `8787`, `8788`, or the Docker socket publicly.
+After both origins are installed, follow the Bridge repository's Raspberry Pi
+bootstrap. An AlgoQuest restart then affects only this origin; it no longer
+recreates a shared edge or restarts intqwq.com.
 
 ## Split the Pi and Windows roles
 

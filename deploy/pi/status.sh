@@ -33,7 +33,7 @@ docker compose --env-file "${env_file}" ps
 web_host="$(health_host "$(get_env_value WEB_BIND_ADDRESS 127.0.0.1)")"
 api_host="$(health_host "$(get_env_value API_BIND_ADDRESS 127.0.0.1)")"
 judge_host="$(health_host "$(get_env_value JUDGE_BIND_ADDRESS 127.0.0.1)")"
-web_port="$(get_env_value WEB_PORT 8080)"
+web_port="$(get_env_value WEB_PORT 18081)"
 api_port="$(get_env_value API_PORT 8787)"
 judge_port="$(get_env_value JUDGE_PORT 8788)"
 
