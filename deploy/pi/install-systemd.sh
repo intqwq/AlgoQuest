@@ -34,10 +34,12 @@ docker_path="$(command -v docker)"
 docker compose up --help 2>&1 | grep -q -- '--wait' || \
   die "Docker Compose is too old. Install a version that supports 'compose up --wait'."
 
+"${script_dir}/check-network-boundary.sh"
+
 timeout_start=$((wait_timeout + 60))
 cat > "${unit_path}" <<SYSTEMD_UNIT
 [Unit]
-Description=AlgoQuest container stack
+Description=AlgoQuest private application stack
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -46,6 +48,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${project_root}
+ExecStartPre=/bin/bash ${project_root}/deploy/pi/check-network-boundary.sh
 ExecStart=${docker_path} compose --env-file ${env_file} --profile all up -d --remove-orphans --wait --wait-timeout ${wait_timeout}
 ExecStop=${docker_path} compose --env-file ${env_file} --profile all down --remove-orphans
 TimeoutStartSec=${timeout_start}
@@ -61,7 +64,7 @@ if ! systemd-analyze verify "${unit_path}"; then
 fi
 
 if [[ "${dry_run}" == "1" ]]; then
-  echo "[AlgoQuest] Verified systemd unit at ${unit_path}."
+  echo "[AlgoQuest] Verified ${unit_path}."
   exit 0
 fi
 
