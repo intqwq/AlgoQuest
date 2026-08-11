@@ -11,14 +11,26 @@ env_file="${project_root}/.env.pi"
 example_env="${project_root}/.env.pi.example"
 domain="${ALGOQUEST_DOMAIN:-game.intqwq.com}"
 web_port="${ALGOQUEST_WEB_PORT:-18081}"
-operator_user="${ALGOQUEST_OPERATOR_USER:-${SUDO_USER:-root}}"
 
 [[ -f "${project_root}/compose.yml" ]] || die "Run from an AlgoQuest checkout."
 [[ -f "${example_env}" ]] || die "Missing ${example_env}."
 [[ "${domain}" =~ ^[A-Za-z0-9.-]+$ ]] || die "ALGOQUEST_DOMAIN contains unsupported characters."
-[[ "${web_port}" =~ ^[0-9]+$ ]] || die "ALGOQUEST_WEB_PORT must be an integer."
-(( web_port >= 1 && web_port <= 65535 )) || die "ALGOQUEST_WEB_PORT must be between 1 and 65535."
-getent passwd "${operator_user}" >/dev/null || die "Operator user '${operator_user}' does not exist."
+[[ "${web_port}" =~ ^[0-9]+$ ]] && (( web_port >= 1 && web_port <= 65535 )) || die "ALGOQUEST_WEB_PORT must be between 1 and 65535."
+
+# Bridge is the platform prerequisite. Application installers do not install or
+# configure Docker, Cloudflare, public Nginx, DNS, or tunnels themselves.
+command -v bridge >/dev/null || die "Bridge is not installed. Install https://github.com/intqwq/Bridge first."
+command -v docker >/dev/null || die "Docker is missing; reinstall/repair Bridge first."
+command -v jq >/dev/null || die "jq is missing; reinstall/repair Bridge first."
+systemctl is-active --quiet bridge-edge.service || die "bridge-edge.service is not active."
+systemctl is-active --quiet bridge-cloudflared.service || die "bridge-cloudflared.service is not active."
+docker info >/dev/null || die "Docker is not reachable."
+docker compose up --help 2>&1 | grep -q -- '--wait' || die "Docker Compose must support --wait."
+
+source /etc/os-release
+[[ "${ID:-}" == "ubuntu" || "${ID:-}" == "debian" ]] || die "This production installer targets Ubuntu/Debian. Found '${ID:-unknown}'."
+architecture="$(dpkg --print-architecture)"
+[[ "${architecture}" == "arm64" ]] || log "Warning: Raspberry Pi deployment is normally arm64; detected ${architecture}."
 
 set_env() {
   local key="$1" value="$2" escaped
@@ -32,7 +44,6 @@ set_env() {
     printf '%s=%s\n' "${key}" "${value}" >> "${env_file}"
   fi
 }
-
 get_env() { sed -n "s/^$1=//p" "${env_file}" | tail -n 1; }
 is_missing_secret() { [[ -z "$1" || "$1" == CHANGE_ME_* ]]; }
 
@@ -58,41 +69,6 @@ require_secret() {
   set_env "${key}" "${value}"
 }
 
-source /etc/os-release
-[[ "${ID:-}" == "ubuntu" ]] || die "This bootstrap targets Ubuntu. Found '${ID:-unknown}'."
-architecture="$(dpkg --print-architecture)"
-[[ "${architecture}" == "arm64" ]] || log "Warning: Raspberry Pi Ubuntu is normally arm64; detected ${architecture}."
-
-log "Installing base packages"
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git gnupg openssl sudo
-
-if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
-  log "Installing Docker Engine and Compose v2"
-  conflicting_packages=()
-  for package in docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc; do
-    dpkg-query -W -f='${db:Status-Abbrev}' "${package}" 2>/dev/null | grep -q '^ii ' && conflicting_packages+=("${package}")
-  done
-  (( ${#conflicting_packages[@]} == 0 )) || DEBIAN_FRONTEND=noninteractive apt-get remove -y "${conflicting_packages[@]}"
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
-  cat > /etc/apt/sources.list.d/docker.sources <<DOCKER_REPO
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: ${VERSION_CODENAME}
-Components: stable
-Architectures: ${architecture}
-Signed-By: /etc/apt/keyrings/docker.asc
-DOCKER_REPO
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-fi
-systemctl enable --now docker
-[[ "${operator_user}" == "root" ]] || usermod -aG docker "${operator_user}"
-docker info >/dev/null
-docker compose up --help 2>&1 | grep -q -- '--wait' || die "Docker Compose must support --wait."
-
 log "Preparing the private AlgoQuest origin"
 [[ -f "${env_file}" ]] || cp "${example_env}" "${env_file}"
 chmod 600 "${env_file}"
@@ -101,6 +77,7 @@ set_env WEB_PORT "${web_port}"
 set_env API_BIND_ADDRESS 127.0.0.1
 set_env JUDGE_BIND_ADDRESS 127.0.0.1
 set_env DB_BIND_ADDRESS 127.0.0.1
+set_env PUBLIC_HOSTNAME "${domain}"
 set_env API_ALLOWED_ORIGIN "https://${domain}"
 set_env PUBLIC_APP_URL "https://${domain}"
 set_env TURNSTILE_EXPECTED_HOSTNAME "${domain}"
@@ -116,7 +93,10 @@ ALGOQUEST_NO_CONSOLE=1 ./deploy/pi/deploy.sh all
 curl --noproxy '*' -fsS "http://127.0.0.1:${web_port}/healthz" >/dev/null || die "Origin health check failed."
 ./deploy/pi/install-systemd.sh >/dev/null
 
-log "AlgoQuest origin deployment complete"
+log "Registering AlgoQuest with Bridge"
+bash ./deploy/pi/register-bridge.sh
+
+log "AlgoQuest deployment complete"
 printf 'Private origin: http://127.0.0.1:%s\n' "${web_port}"
-printf 'Public routing: managed independently by https://github.com/intqwq/Bridge\n'
+printf 'Public host:    https://%s (registered through Bridge)\n' "${domain}"
 printf 'Status:         sudo systemctl status algoquest\n'
