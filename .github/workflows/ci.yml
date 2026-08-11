@@ -103,11 +103,23 @@ jobs:
           cp .env.pi.example .env.pi
           unit_dir="$(mktemp -d)"
           unit_file="${unit_dir}/algoquest.service"
+          bridge_stub="/etc/systemd/system/bridge-edge.service"
           cleanup() {
             rm -f .env.pi
+            sudo rm -f "${bridge_stub}"
             sudo rm -rf "${unit_dir}"
           }
           trap cleanup EXIT
+          cat > bridge-edge.service <<'UNIT'
+          [Unit]
+          Description=CI stub for Bridge dependency
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          UNIT
+          sudo install -m 0644 bridge-edge.service "${bridge_stub}"
+          rm -f bridge-edge.service
+          sudo systemctl daemon-reload
           sudo env \
             ALGOQUEST_SYSTEMD_DRY_RUN=1 \
             ALGOQUEST_SYSTEMD_UNIT_PATH="${unit_file}" \
