@@ -95,12 +95,12 @@ Turnstile credentials.
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
 cd AlgoQuest
-sudo bash deploy/pi/bootstrap-ubuntu.sh
+sudo bash install.sh
 ```
 
-The bootstrap installs Docker Engine and Compose v2, generates local database and
-Judge secrets, builds and smoke-tests the complete stack, and enables
-`algoquest.service` at boot. Its Nginx origin is bound only to
+The root installer installs Docker Engine and Compose v2, generates local
+database and Judge secrets, builds and smoke-tests the complete stack, and
+enables `algoquest.service` at boot. Its Nginx origin is bound only to
 `127.0.0.1:18081`. Public Nginx routing and Cloudflare Tunnel are owned by the
 independent [Bridge](https://github.com/intqwq/Bridge) service, alongside the
 intqwq.com origin as an equal peer.
@@ -109,18 +109,33 @@ For an already prepared Docker host, the lower-level deployment command remains
 available:
 
 ```bash
-chmod +x deploy/pi/*.sh
+chmod +x install.sh uninstall.sh deploy/pi/*.sh
 ./deploy/pi/deploy.sh
 ```
 
-The production example and bootstrap use loopback port `18081`. Deploy Bridge
+The production example and installer use loopback port `18081`. Deploy Bridge
 after both website origins are healthy. Judge concurrency remains `2`, with
-named Docker volumes for PostgreSQL, Judge work files, and the compile cache.
+named Docker volumes for PostgreSQL, Judge work files, the compile cache, and the
+Judge queue.
 
 ```bash
 ./deploy/pi/status.sh
 sudo systemctl status algoquest
 ```
+
+To remove the Pi deployment completely while preserving Bridge:
+
+```bash
+sudo bash uninstall.sh --plan
+sudo bash uninstall.sh
+```
+
+The uninstaller removes AlgoQuest systemd units, Compose resources, persistent
+volumes, runtime data, `.env.pi`, and legacy AlgoQuest Cloudflare files. It never
+stops or deletes `bridge-edge.service`, `bridge-cloudflared.service`,
+`~/.cloudflared/bridge.yml`, or the remote tunnel named `bridge`. The optional
+`--remove-legacy-tunnel` flag deletes only the obsolete remote tunnel named
+exactly `algoquest`; `--purge-source` removes the checkout last.
 
 Full instructions: [Raspberry Pi deployment](docs/DEPLOY_RASPBERRY_PI.md).
 Production account setup: [Resend and Turnstile](docs/ACCOUNT_SECURITY.md).
@@ -235,6 +250,7 @@ npm test
 npm --prefix services/api test
 npm --prefix judge test
 docker compose --env-file .env.windows.example --profile all config
+bash -n install.sh uninstall.sh deploy/pi/*.sh
 ```
 
 Run the real Docker Judge regression suite on a Docker host:
@@ -250,18 +266,24 @@ poll, receive an accepted score, persist the submission, and clear the quest.
 ## Repository layout
 
 ```text
-app/                  Vinext/React route and global styling
-components/           Account, map, mission, Codex, editorial, and admin UI
-lib/                  Quest/Codex data, localization, save logic, and API client
-services/api/         Explicit auth/learning/OJ routes, PostgreSQL repositories, migrations, tests
-judge/                Redis queue, socket-free API, Docker worker, runner image and tests
-deploy/docker/        Web container
-deploy/nginx/         Same-origin gateway configuration
-deploy/windows/       PowerShell deployment commands
-deploy/pi/            Raspberry Pi deployment and systemd commands
-docs/                 Architecture, API, security, and deployment guides
-compose.yml           Service definitions and component profiles
+install.sh             Raspberry Pi one-click production installer
+uninstall.sh           Raspberry Pi destructive cleanup with Bridge preservation
+app/                   Vinext/React route and global styling
+components/            Account, map, mission, Codex, editorial, and admin UI
+lib/                   Quest/Codex data, localization, save logic, and API client
+services/api/          Explicit auth/learning/OJ routes, PostgreSQL repositories, migrations, tests
+judge/                 Redis queue, socket-free API, Docker worker, runner image and tests
+deploy/docker/         Web container
+deploy/nginx/          AlgoQuest-local same-origin gateway configuration
+deploy/windows/        PowerShell deployment commands
+deploy/pi/             Raspberry Pi lower-level deployment/systemd/status commands
+docs/                  Architecture, API, security, and deployment guides
+compose.yml            Service definitions and component profiles
 ```
+
+The Nginx configuration under `deploy/nginx/` remains intentionally inside
+AlgoQuest. It is the application-local gateway joining Web and Core API. Bridge
+owns the separate public Host-routing Nginx edge and the Cloudflare Tunnel.
 
 ## Judge security and limits
 
