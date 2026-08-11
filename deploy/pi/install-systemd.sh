@@ -34,7 +34,7 @@ docker_path="$(command -v docker)"
 docker compose up --help 2>&1 | grep -q -- '--wait' || \
   die "Docker Compose is too old. Install a version that supports 'compose up --wait'."
 
-"${script_dir}/check-network-boundary.sh"
+bash "${script_dir}/check-network-boundary.sh"
 
 timeout_start=$((wait_timeout + 60))
 cat > "${unit_path}" <<SYSTEMD_UNIT
