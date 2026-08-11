@@ -4,7 +4,7 @@ import test from "node:test";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("root Pi installer treats Bridge as its infrastructure prerequisite", async () => {
+test("root Pi installer treats Bridge as its networking prerequisite", async () => {
   const [install, compatibilityBootstrap, register] = await Promise.all([
     read("install.sh"),
     read("deploy/pi/bootstrap-ubuntu.sh"),
@@ -13,7 +13,8 @@ test("root Pi installer treats Bridge as its infrastructure prerequisite", async
   assert.match(install, /command -v bridge/);
   assert.match(install, /bridge-edge\.service/);
   assert.match(install, /bridge-cloudflared\.service/);
-  assert.doesNotMatch(install, /apt-get|download\.docker\.com|pkg\.cloudflare\.com/);
+  assert.doesNotMatch(install, /download\.docker\.com|pkg\.cloudflare\.com|cloudflared tunnel/);
+  assert.match(install, /apt-get install -y openssl/);
   assert.match(install, /register-bridge\.sh/);
   assert.match(compatibilityBootstrap, /exec bash "\$\{project_root\}\/install\.sh" "\$@"/);
   assert.match(register, /service: "algoquest"/);
