@@ -49,13 +49,15 @@ The browser never receives database credentials or the private Judge token. The
 Core API is the only application client of PostgreSQL. The Judge API has no
 Docker access; only the dedicated worker receives the Docker socket.
 
-On the production Raspberry Pi, **Bridge is the Internet boundary**. AlgoQuest's
-Nginx gateway is only the private application-origin router:
+On the production Raspberry Pi, **Bridge is the prerequisite and Internet
+boundary**. AlgoQuest starts only a private origin and then registers its own
+hostname with the already-running Bridge registrar:
 
 ```text
 Internet
-  -> Cloudflare
-  -> Bridge
+  -> Cloudflare Tunnel owned by Bridge
+  -> Bridge neutral Host router
+  -> AlgoQuest registration
   -> AlgoQuest Gateway (127.0.0.1:18081)
        -> Web (Vinext / React)
        -> Core API
@@ -68,6 +70,7 @@ Internet
                            -> disposable runner container
 ```
 
+Bridge contains no AlgoQuest hostname, port, repository path, or lifecycle logic.
 See [Architecture](docs/ARCHITECTURE.md) for trust boundaries, data ownership,
 deployment shapes, and scaling constraints. See [API reference](docs/API.md) for
 the public Core API and private Judge contract.
@@ -94,8 +97,18 @@ Full instructions: [Windows deployment](docs/DEPLOY_WINDOWS.md).
 
 ## Raspberry Pi Ubuntu one-click deployment
 
-Requirements: Raspberry Pi 5 with 64-bit Ubuntu and production Resend and
-Turnstile credentials.
+Requirements: Raspberry Pi 5 with 64-bit Ubuntu, production Resend and Turnstile
+credentials, and an already-installed Bridge.
+
+Install Bridge first:
+
+```bash
+git clone https://github.com/intqwq/Bridge.git
+cd Bridge
+sudo bash install.sh
+```
+
+Then install AlgoQuest:
 
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
@@ -103,32 +116,30 @@ cd AlgoQuest
 sudo bash install.sh
 ```
 
-The root installer installs Docker Engine and Compose v2, generates local
-database and Judge secrets, builds and smoke-tests the complete stack, and
-enables `algoquest.service` at boot. Its Nginx origin is bound only to
-`127.0.0.1:18081`. Public Nginx routing and Cloudflare Tunnel are owned by the
-independent [Bridge](https://github.com/intqwq/Bridge) service, alongside the
-intqwq.com origin as an equal peer.
+AlgoQuest's installer treats Bridge as infrastructure. It does not install or
+configure Docker, Cloudflare Tunnel, public Nginx routing, or DNS. It generates
+local database and Judge secrets, builds and smoke-tests the complete application
+stack, enables `algoquest.service`, verifies the private origin, then registers
+`PUBLIC_HOSTNAME` with Bridge through `deploy/pi/register-bridge.sh`.
 
 The Pi deployment fails closed if any AlgoQuest host bind is changed away from
-`127.0.0.1`; the same check runs again before the systemd service starts.
+`127.0.0.1`; the same check runs before the systemd service starts. The systemd
+unit also requires `bridge-edge.service`, making boot order Bridge -> AlgoQuest.
 
-For an already prepared Docker host, the lower-level deployment command remains
-available:
+The production defaults are:
 
-```bash
-chmod +x install.sh uninstall.sh deploy/pi/*.sh
-./deploy/pi/deploy.sh
+```text
+PUBLIC_HOSTNAME=game.intqwq.com
+private origin=127.0.0.1:18081
 ```
 
-The production example and installer use loopback port `18081`. Deploy Bridge
-after both website origins are healthy. Judge concurrency remains `2`, with
-named Docker volumes for PostgreSQL, Judge work files, the compile cache, and the
-Judge queue.
+Judge concurrency remains `2`, with named Docker volumes for PostgreSQL, Judge
+work files, the compile cache, and the Judge queue.
 
 ```bash
 ./deploy/pi/status.sh
 sudo systemctl status algoquest
+sudo bridge list
 ```
 
 To remove the Pi deployment completely while preserving Bridge:
@@ -138,12 +149,12 @@ sudo bash uninstall.sh --plan
 sudo bash uninstall.sh
 ```
 
-The uninstaller removes AlgoQuest systemd units, Compose resources, persistent
-volumes, runtime data, `.env.pi`, and legacy AlgoQuest Cloudflare files. It never
-stops or deletes `bridge-edge.service`, `bridge-cloudflared.service`,
-`~/.cloudflared/bridge.yml`, or the remote tunnel named `bridge`. The optional
-`--remove-legacy-tunnel` flag deletes only the obsolete remote tunnel named
-exactly `algoquest`; `--purge-source` removes the checkout last.
+The uninstaller first unregisters service ID `algoquest` from Bridge, then
+removes AlgoQuest systemd units, Compose resources, persistent volumes, runtime
+data, `.env.pi`, and known legacy AlgoQuest leftovers. Other Bridge registrations
+remain untouched. The optional `--remove-legacy-tunnel` flag deletes only the
+obsolete remote tunnel named exactly `algoquest`; `--purge-source` removes the
+checkout last.
 
 Full instructions: [Raspberry Pi deployment](docs/DEPLOY_RASPBERRY_PI.md).
 Production account setup: [Resend and Turnstile](docs/ACCOUNT_SECURITY.md).
@@ -172,9 +183,9 @@ The Pi commands remain useful for local component maintenance:
 ./deploy/pi/deploy.sh judge
 ```
 
-The Bridge-managed `.env.pi` is deliberately **not** a split-host configuration:
-all host-published services must stay on `127.0.0.1`. Do not turn a Pi component
-into a remote service by changing its bind address to `0.0.0.0`.
+The Bridge-managed production shape is deliberately **not** a split-host
+configuration: all host-published services must stay on `127.0.0.1`. Do not turn
+a Pi component into a remote service by changing its bind address to `0.0.0.0`.
 
 If a genuine cross-machine deployment is needed, use a separate explicitly
 secured deployment shape and change the relevant application upstreams there:
@@ -281,8 +292,8 @@ poll, receive an accepted score, persist the submission, and clear the quest.
 ## Repository layout
 
 ```text
-install.sh             Raspberry Pi one-click production installer
-uninstall.sh           Raspberry Pi destructive cleanup with Bridge preservation
+install.sh             Raspberry Pi production installer; requires Bridge
+uninstall.sh           AlgoQuest cleanup plus own Bridge unregistration
 app/                   Vinext/React route and global styling
 components/            Account, map, mission, Codex, editorial, and admin UI
 lib/                   Quest/Codex data, localization, save logic, and API client
@@ -291,6 +302,7 @@ judge/                 Redis queue, socket-free API, Docker worker, runner image
 deploy/docker/         Web container
 deploy/nginx/          AlgoQuest-local same-origin gateway configuration
 deploy/windows/        PowerShell deployment commands
+deploy/pi/register-bridge.sh  application-owned Bridge registration
 deploy/pi/             Raspberry Pi lower-level deployment/systemd/status commands
 docs/                  Architecture, API, security, and deployment guides
 compose.yml            Service definitions and component profiles
@@ -298,7 +310,7 @@ compose.yml            Service definitions and component profiles
 
 The Nginx configuration under `deploy/nginx/` remains intentionally inside
 AlgoQuest. It is the application-local gateway joining Web and Core API. Bridge
-owns the separate public Host-routing Nginx edge and the Cloudflare Tunnel.
+owns the separate neutral public edge and Cloudflare Tunnel.
 
 ## Judge security and limits
 
