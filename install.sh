@@ -17,8 +17,8 @@ web_port="${ALGOQUEST_WEB_PORT:-18081}"
 [[ "${domain}" =~ ^[A-Za-z0-9.-]+$ ]] || die "ALGOQUEST_DOMAIN contains unsupported characters."
 [[ "${web_port}" =~ ^[0-9]+$ ]] && (( web_port >= 1 && web_port <= 65535 )) || die "ALGOQUEST_WEB_PORT must be between 1 and 65535."
 
-# Bridge is the platform prerequisite. Application installers do not install or
-# configure Docker, Cloudflare, public Nginx, DNS, or tunnels themselves.
+# Bridge is the networking/platform prerequisite. Application installers do not
+# configure Docker Engine, Cloudflare, public Nginx, DNS, or tunnels themselves.
 command -v bridge >/dev/null || die "Bridge is not installed. Install https://github.com/intqwq/Bridge first."
 command -v docker >/dev/null || die "Docker is missing; reinstall/repair Bridge first."
 command -v jq >/dev/null || die "jq is missing; reinstall/repair Bridge first."
@@ -31,6 +31,14 @@ source /etc/os-release
 [[ "${ID:-}" == "ubuntu" || "${ID:-}" == "debian" ]] || die "This production installer targets Ubuntu/Debian. Found '${ID:-unknown}'."
 architecture="$(dpkg --print-architecture)"
 [[ "${architecture}" == "arm64" ]] || log "Warning: Raspberry Pi deployment is normally arm64; detected ${architecture}."
+
+# OpenSSL is an AlgoQuest application dependency used to generate private
+# database/Judge credentials. It intentionally stays outside Bridge ownership.
+if ! command -v openssl >/dev/null; then
+  log "Installing AlgoQuest application dependency: openssl"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y openssl
+fi
 
 set_env() {
   local key="$1" value="$2" escaped
