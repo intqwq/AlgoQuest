@@ -98,10 +98,11 @@ jobs:
         run: |
           set -euo pipefail
           cp .env.pi.example .env.pi
-          unit_file="$(mktemp --suffix=.service)"
+          unit_dir="$(mktemp -d)"
+          unit_file="${unit_dir}/algoquest.service"
           cleanup() {
             rm -f .env.pi
-            sudo rm -f "${unit_file}"
+            sudo rm -rf "${unit_dir}"
           }
           trap cleanup EXIT
           sudo env \
