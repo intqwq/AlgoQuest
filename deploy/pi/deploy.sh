@@ -62,7 +62,7 @@ if grep -q "CHANGE_ME_JUDGE_TOKEN" "${env_file}"; then
   echo "Generated the Judge API token."
 fi
 
-"${script_dir}/check-network-boundary.sh"
+bash "${script_dir}/check-network-boundary.sh"
 
 if [[ "${mode}" == "all" || "${mode}" == "api" ]]; then
   missing_keys=()
