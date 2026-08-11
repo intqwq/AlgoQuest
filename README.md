@@ -34,7 +34,7 @@ Compose stack supports Windows development and Raspberry Pi 5 deployment.
 
 ## Architecture
 
-The public application is split into independently deployable services:
+The application is split into independently deployable services:
 
 | Service | Default port | Responsibility |
 |---|---:|---|
@@ -49,9 +49,14 @@ The browser never receives database credentials or the private Judge token. The
 Core API is the only application client of PostgreSQL. The Judge API has no
 Docker access; only the dedicated worker receives the Docker socket.
 
+On the production Raspberry Pi, **Bridge is the Internet boundary**. AlgoQuest's
+Nginx gateway is only the private application-origin router:
+
 ```text
-Browser
-  -> Gateway (Nginx)
+Internet
+  -> Cloudflare
+  -> Bridge
+  -> AlgoQuest Gateway (127.0.0.1:18081)
        -> Web (Vinext / React)
        -> Core API
             -> PostgreSQL
@@ -105,6 +110,9 @@ enables `algoquest.service` at boot. Its Nginx origin is bound only to
 independent [Bridge](https://github.com/intqwq/Bridge) service, alongside the
 intqwq.com origin as an equal peer.
 
+The Pi deployment fails closed if any AlgoQuest host bind is changed away from
+`127.0.0.1`; the same check runs again before the systemd service starts.
+
 For an already prepared Docker host, the lower-level deployment command remains
 available:
 
@@ -140,7 +148,7 @@ exactly `algoquest`; `--purge-source` removes the checkout last.
 Full instructions: [Raspberry Pi deployment](docs/DEPLOY_RASPBERRY_PI.md).
 Production account setup: [Resend and Turnstile](docs/ACCOUNT_SECURITY.md).
 
-## Split-host deployment
+## Component and split-host deployment
 
 Every deployment script accepts one component:
 
@@ -148,7 +156,7 @@ Every deployment script accepts one component:
 all | web | api | judge | database
 ```
 
-Examples:
+Examples on Windows:
 
 ```powershell
 .\deploy\windows\deploy.ps1 -Mode web
@@ -156,22 +164,29 @@ Examples:
 .\deploy\windows\deploy.ps1 -Mode judge
 ```
 
+The Pi commands remain useful for local component maintenance:
+
 ```bash
 ./deploy/pi/deploy.sh web
 ./deploy/pi/deploy.sh api
 ./deploy/pi/deploy.sh judge
 ```
 
-For cross-machine deployment, change the relevant values in `.env.windows` or
-`.env.pi`:
+The Bridge-managed `.env.pi` is deliberately **not** a split-host configuration:
+all host-published services must stay on `127.0.0.1`. Do not turn a Pi component
+into a remote service by changing its bind address to `0.0.0.0`.
+
+If a genuine cross-machine deployment is needed, use a separate explicitly
+secured deployment shape and change the relevant application upstreams there:
 
 - Web host: `API_UPSTREAM`
 - API host: `DATABASE_URL` and `JUDGE_API_URL`
 - API and Judge: matching `JUDGE_API_TOKEN`
 - Account/API host: `PUBLIC_APP_URL`, Resend credentials, and Turnstile credentials
 
-Do not expose PostgreSQL or the Judge directly to the public internet. Use a
-private LAN, Tailnet/VPN, or a mutually authenticated TLS tunnel between hosts.
+Keep PostgreSQL and the Judge off the public Internet. Use an authenticated
+private overlay or mutually authenticated transport between hosts instead of
+weakening the standard Pi production contract.
 
 ## Account and role model
 
