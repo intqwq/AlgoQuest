@@ -1,27 +1,21 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path) =>
   readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-async function isMissing(path) {
-  try {
-    await access(new URL(`../${path}`, import.meta.url));
-    return false;
-  } catch (error) {
-    if (error?.code === "ENOENT") return true;
-    throw error;
-  }
-}
-
 test("root Pi installer echoes account credentials and installs compatible Docker packages", async () => {
-  const install = await read("install.sh");
+  const [install, compatibilityBootstrap] = await Promise.all([
+    read("install.sh"),
+    read("deploy/pi/bootstrap-ubuntu.sh"),
+  ]);
   assert.match(install, /read -r -p "\$\{label\}: " value/);
   assert.doesNotMatch(install, /read -r -s -p/);
   assert.match(install, /docker-compose-v2 docker-doc podman-docker containerd runc/);
   assert.match(install, /compose up --help/);
-  assert.equal(await isMissing("deploy/pi/bootstrap-ubuntu.sh"), true);
+  assert.match(compatibilityBootstrap, /exec bash "\$\{project_root\}\/install\.sh" "\$@"/);
+  assert.doesNotMatch(compatibilityBootstrap, /apt-get|docker compose up|cloudflared/);
 });
 
 test("Pi deploy validates actual credential values and waits for readiness", async () => {
