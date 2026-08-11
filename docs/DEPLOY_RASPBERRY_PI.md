@@ -13,12 +13,12 @@ the distro `docker-compose-v2` package with Docker's
 
 ## One-click Ubuntu deployment
 
-Clone the repository, then run the Ubuntu bootstrap as root:
+Clone the repository, then run the root installer as root:
 
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
 cd AlgoQuest
-sudo bash deploy/pi/bootstrap-ubuntu.sh
+sudo bash install.sh
 ```
 
 The script performs the complete production setup:
@@ -40,7 +40,7 @@ To use another hostname or private origin port:
 sudo env \
   ALGOQUEST_DOMAIN=game.intqwq.com \
   ALGOQUEST_WEB_PORT=18081 \
-  bash deploy/pi/bootstrap-ubuntu.sh
+  bash install.sh
 ```
 
 For a non-interactive environment setup, pass the required account values as
@@ -52,12 +52,35 @@ sudo env \
   TURNSTILE_SITE_KEY='...' \
   TURNSTILE_SECRET_KEY='...' \
   SITE_OWNER_EMAIL='owner@example.com' \
-  bash deploy/pi/bootstrap-ubuntu.sh
+  bash install.sh
 ```
 
 Do not put these secrets into shell history on a shared machine. An existing
 `.env.pi` is reused, so entering the credentials interactively is the safer
 default.
+
+## Uninstall
+
+Preview a complete host cleanup first:
+
+```bash
+sudo bash uninstall.sh --plan
+```
+
+Then remove the AlgoQuest runtime, systemd units, Compose resources, PostgreSQL
+and Judge volumes, local deployment configuration, runtime data and legacy
+AlgoQuest Cloudflare files:
+
+```bash
+sudo bash uninstall.sh
+```
+
+The interactive confirmation phrase is `ERASE-ALGOQUEST`. The installer and
+uninstaller deliberately do **not** stop or remove Bridge. `bridge-edge.service`,
+`bridge-cloudflared.service`, `~/.cloudflared/bridge.yml`, and the remote tunnel
+named `bridge` remain untouched. Use `--remove-legacy-tunnel` only when the old
+remote tunnel named exactly `algoquest` should also be deleted. Use
+`--purge-source` only when this Git checkout should be removed after uninstall.
 
 ## Manual first deployment
 
@@ -66,7 +89,7 @@ Use this path when Docker is already managed:
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
 cd AlgoQuest
-chmod +x deploy/pi/*.sh
+chmod +x install.sh uninstall.sh deploy/pi/*.sh
 cp .env.pi.example .env.pi
 ```
 
@@ -114,7 +137,7 @@ sudo ./deploy/pi/install-systemd.sh
 ```
 
 The generated unit uses the repository's current absolute path, so the project
-does not have to live under a fixed directory. The one-click bootstrap installs
+does not have to live under a fixed directory. The one-click installer installs
 only the application unit.
 
 ## Publish through Bridge
@@ -134,6 +157,11 @@ Do not expose `18081`, `5432`, `8787`, `8788`, or the Docker socket publicly.
 After both origins are installed, follow the Bridge repository's Raspberry Pi
 bootstrap. An AlgoQuest restart then affects only this origin; it no longer
 recreates a shared edge or restarts intqwq.com.
+
+AlgoQuest still contains its own Dockerized Nginx **origin gateway**. That
+application-local gateway combines Web and Core API behind one same-origin
+endpoint. It is separate from Bridge's shared public Nginx edge and must remain
+part of the AlgoQuest Compose stack.
 
 ## Split the Pi and Windows roles
 
