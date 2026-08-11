@@ -17,7 +17,6 @@ die() { echo "[AlgoQuest] ERROR: $*" >&2; exit 1; }
 [[ ! "${project_root}" =~ [[:space:]\\\"] ]] || die "The project path cannot contain whitespace, backslashes, or double quotes."
 command -v docker >/dev/null || die "Docker is missing."
 command -v systemd-analyze >/dev/null || die "systemd-analyze is missing."
-command -v bridge >/dev/null || die "Bridge is not installed."
 [[ -r "${env_file}" ]] || die "Missing or unreadable ${env_file}."
 [[ "${wait_timeout}" =~ ^[1-9][0-9]*$ ]] || die "ALGOQUEST_COMPOSE_WAIT_TIMEOUT must be a positive integer."
 docker compose up --help 2>&1 | grep -q -- '--wait' || die "Docker Compose must support 'compose up --wait'."
