@@ -1,16 +1,27 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path) =>
   readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("Pi bootstrap echoes account credentials and installs compatible Docker packages", async () => {
-  const bootstrap = await read("deploy/pi/bootstrap-ubuntu.sh");
-  assert.match(bootstrap, /read -r -p "\$\{label\}: " value/);
-  assert.doesNotMatch(bootstrap, /read -r -s -p/);
-  assert.match(bootstrap, /docker-compose-v2 docker-doc podman-docker containerd runc/);
-  assert.match(bootstrap, /compose up --help/);
+async function isMissing(path) {
+  try {
+    await access(new URL(`../${path}`, import.meta.url));
+    return false;
+  } catch (error) {
+    if (error?.code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+test("root Pi installer echoes account credentials and installs compatible Docker packages", async () => {
+  const install = await read("install.sh");
+  assert.match(install, /read -r -p "\$\{label\}: " value/);
+  assert.doesNotMatch(install, /read -r -s -p/);
+  assert.match(install, /docker-compose-v2 docker-doc podman-docker containerd runc/);
+  assert.match(install, /compose up --help/);
+  assert.equal(await isMissing("deploy/pi/bootstrap-ubuntu.sh"), true);
 });
 
 test("Pi deploy validates actual credential values and waits for readiness", async () => {
@@ -42,16 +53,33 @@ test("Pi service and status checks honor readiness and configured ports", async 
   assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:8787\/health'\).*if\(!r\.ok\)/);
 });
 
-test("Pi bootstrap leaves shared routing to Bridge", async () => {
-  const [bootstrap, env] = await Promise.all([
-    read("deploy/pi/bootstrap-ubuntu.sh"),
+test("root Pi installer leaves shared routing to Bridge", async () => {
+  const [install, env] = await Promise.all([
+    read("install.sh"),
     read(".env.pi.example"),
   ]);
-  assert.match(bootstrap, /ALGOQUEST_WEB_PORT:-18081/);
-  assert.match(bootstrap, /github\.com\/intqwq\/Bridge/);
-  assert.doesNotMatch(bootstrap, /tunnel create|algoquest-cloudflared\.service/);
+  assert.match(install, /ALGOQUEST_WEB_PORT:-18081/);
+  assert.match(install, /github\.com\/intqwq\/Bridge/);
+  assert.doesNotMatch(install, /tunnel create|algoquest-cloudflared\.service/);
   assert.match(env, /^WEB_BIND_ADDRESS=127\.0\.0\.1$/m);
   assert.match(env, /^WEB_PORT=18081$/m);
+});
+
+test("uninstaller erases AlgoQuest state but preserves Bridge", async () => {
+  const uninstall = await read("uninstall.sh");
+  assert.match(uninstall, /ERASE-ALGOQUEST/);
+  assert.match(uninstall, /--plan/);
+  assert.match(uninstall, /algoquest-postgres-data/);
+  assert.match(uninstall, /algoquest-judge-work/);
+  assert.match(uninstall, /algoquest-judge-cache/);
+  assert.match(uninstall, /algoquest-judge-queue/);
+  assert.match(uninstall, /algoquest-cloudflared\.service/);
+  assert.match(uninstall, /\/var\/lib\/algoquest/);
+  assert.match(uninstall, /algoquest-runner:/);
+  assert.doesNotMatch(uninstall, /docker system prune/);
+  assert.doesNotMatch(uninstall, /systemctl .*bridge-edge/);
+  assert.doesNotMatch(uninstall, /systemctl .*bridge-cloudflared/);
+  assert.doesNotMatch(uninstall, /tunnel delete -f bridge/);
 });
 
 test("Nginx quotes regex locations that contain repetition braces", async () => {
