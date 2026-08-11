@@ -19,11 +19,8 @@ Permanently removes the AlgoQuest Raspberry Pi deployment, including its
 containers, networks, named data volumes, systemd units, local deployment
 configuration, runtime data and legacy AlgoQuest Cloudflare residue.
 
-This script NEVER removes or stops Bridge infrastructure such as:
-  bridge-edge.service
-  bridge-cloudflared.service
-  ~/.cloudflared/bridge.yml
-  the Cloudflare tunnel named "bridge"
+AlgoQuest unregisters only its own service id from Bridge. Bridge itself and all
+other registered applications remain untouched.
 
 Options:
   --plan                  Show what would be removed without changing anything.
@@ -56,16 +53,12 @@ run() {
 }
 
 [[ -n "${operator_home}" ]] || die "Could not resolve the operator home directory."
-
 get_env_value() {
   local key="$1" fallback="$2" value=""
   if [[ -f "${env_file}" ]]; then value="$(sed -n "s/^${key}=//p" "${env_file}" | tail -n 1)"; fi
   printf '%s' "${value:-${fallback}}"
 }
-
-validate_volume_name() {
-  [[ "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Unsafe Docker volume name: $1"
-}
+validate_volume_name() { [[ "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || die "Unsafe Docker volume name: $1"; }
 
 postgres_volume="$(get_env_value POSTGRES_VOLUME algoquest-postgres-data)"
 judge_work_volume="$(get_env_value JUDGE_WORK_VOLUME algoquest-judge-work)"
@@ -79,26 +72,32 @@ AlgoQuest will be removed from this host.
 
 Application checkout: ${project_root}
 Operator home:       ${operator_home}
+Bridge registration: service id "algoquest" only
 Systemd units:       algoquest.service, legacy algoquest-cloudflared.service
 Docker volumes:      ${volumes[*]}
 Runtime data:        /var/lib/algoquest
 Legacy scratch:      ${operator_home}/algoquest-exec-scratch
 Local Cloudflare:    ${operator_home}/.cloudflared/algoquest.yml*
-Bridge:              PRESERVED
+Bridge platform:     PRESERVED
 SUMMARY
 
 if [[ "${plan_only}" == "0" ]]; then
   confirm="${ALGOQUEST_UNINSTALL_CONFIRM:-}"
-  if [[ -z "${confirm}" && -t 0 ]]; then
-    read -r -p 'Type ERASE-ALGOQUEST to continue: ' confirm
-  fi
+  if [[ -z "${confirm}" && -t 0 ]]; then read -r -p 'Type ERASE-ALGOQUEST to continue: ' confirm; fi
   [[ "${confirm}" == "ERASE-ALGOQUEST" ]] || die "Confirmation phrase did not match. Nothing was removed."
 fi
 
+log "Unregistering AlgoQuest from Bridge"
+if command -v bridge >/dev/null 2>&1; then
+  if [[ "${plan_only}" == "1" ]]; then
+    echo "[plan] bridge unregister algoquest"
+  else
+    bridge unregister algoquest 2>/dev/null || true
+  fi
+fi
+
 log "Stopping and removing AlgoQuest systemd units"
-for unit in algoquest.service algoquest-cloudflared.service; do
-  run systemctl disable --now "${unit}" 2>/dev/null || true
-done
+for unit in algoquest.service algoquest-cloudflared.service; do run systemctl disable --now "${unit}" 2>/dev/null || true; done
 run rm -f /etc/systemd/system/algoquest.service /etc/systemd/system/algoquest-cloudflared.service
 run systemctl daemon-reload
 if [[ "${plan_only}" == "0" ]]; then systemctl reset-failed algoquest.service algoquest-cloudflared.service 2>/dev/null || true; fi
@@ -119,9 +118,7 @@ if command -v docker >/dev/null 2>&1; then
   fi
 
   log "Removing AlgoQuest named volumes"
-  for volume in "${volumes[@]}"; do
-    if docker volume inspect "${volume}" >/dev/null 2>&1; then run docker volume rm -f "${volume}"; fi
-  done
+  for volume in "${volumes[@]}"; do if docker volume inspect "${volume}" >/dev/null 2>&1; then run docker volume rm -f "${volume}"; fi; done
 
   log "Removing AlgoQuest-built images"
   mapfile -t images < <(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '(^|/)algoquest([_-]|$)|^algoquest-runner:' || true)
@@ -139,16 +136,8 @@ run rm -f "${operator_home}/.cloudflared/algoquest.yml" "${operator_home}/.cloud
 if [[ "${remove_legacy_tunnel}" == "1" ]]; then
   log "Removing obsolete remote Cloudflare tunnel named exactly 'algoquest'"
   if command -v cloudflared >/dev/null 2>&1; then
-    if [[ "${operator_user}" == "root" ]]; then
-      cf=(env HOME="${operator_home}" cloudflared)
-    else
-      cf=(sudo -u "${operator_user}" -H cloudflared)
-    fi
-    if [[ "${plan_only}" == "1" ]]; then
-      echo "[plan] ${cf[*]} tunnel delete -f algoquest"
-    else
-      "${cf[@]}" tunnel delete -f algoquest 2>/dev/null || true
-    fi
+    if [[ "${operator_user}" == "root" ]]; then cf=(env HOME="${operator_home}" cloudflared); else cf=(sudo -u "${operator_user}" -H cloudflared); fi
+    if [[ "${plan_only}" == "1" ]]; then echo "[plan] ${cf[*]} tunnel delete -f algoquest"; else "${cf[@]}" tunnel delete -f algoquest 2>/dev/null || true; fi
   else
     log "cloudflared is not installed; no remote tunnel action taken"
   fi
@@ -156,11 +145,10 @@ fi
 
 cat <<'BRIDGE'
 
-Bridge infrastructure was intentionally left untouched:
-  bridge-edge.service
-  bridge-cloudflared.service
-  ~/.cloudflared/bridge.yml
-  Cloudflare tunnel "bridge"
+Bridge remains installed and may continue serving any other registered services.
+The old DNS record for AlgoQuest may still point to the Bridge tunnel; if so,
+Bridge now answers it with its default 404 until the hostname is reused or the
+DNS record is removed.
 BRIDGE
 
 if [[ "${purge_source}" == "1" ]]; then
