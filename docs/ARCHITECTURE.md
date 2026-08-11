@@ -12,13 +12,14 @@ On the production Raspberry Pi, the independent
 [Bridge](https://github.com/intqwq/Bridge) repository owns all public networking:
 public hostnames, Cloudflare DNS routes, the shared public Nginx edge, and the
 single Cloudflare Tunnel process. AlgoQuest exposes one loopback-only application
-origin to Bridge.
+origin and registers that origin with Bridge after the application is healthy.
 
 ```text
 Internet
   -> Cloudflare
   -> Bridge tunnel
   -> Bridge edge 127.0.0.1:18080
+  -> Bridge service registry
   -> AlgoQuest origin 127.0.0.1:18081
        -> Gateway
             -> Web
@@ -49,17 +50,20 @@ requires every host-published AlgoQuest service to use `127.0.0.1`.
 2. **One application origin.** Bridge reaches AlgoQuest only through the Gateway
    origin on `127.0.0.1:18081`; browsers do not connect directly to API, Judge,
    Redis, PostgreSQL, or the Docker socket.
-3. **Single data owner.** Only the Core API reads or writes player/platform data
+3. **Declarative registration.** AlgoQuest owns its hostname and origin settings
+   and supplies them to Bridge through the generic registration interface. Bridge
+   contains no AlgoQuest-specific hostname, port, or lifecycle knowledge.
+4. **Single data owner.** Only the Core API reads or writes player/platform data
    in PostgreSQL.
-4. **Single execution owner.** Only the Judge worker receives the Docker socket.
+5. **Single execution owner.** Only the Judge worker receives the Docker socket.
    The Judge API is socket-free.
-5. **Server-authoritative progression.** A quest is cleared only after a
+6. **Server-authoritative progression.** A quest is cleared only after a
    persisted accepted submission meets the quest's pass threshold.
-6. **Public and secret quest data are separated.** Statements and map metadata
+7. **Public and secret quest data are separated.** Statements and map metadata
    may reach browsers; hidden tests remain server-side.
-7. **Roles are enforced by the Core API.** UI visibility is convenience, not an
+8. **Roles are enforced by the Core API.** UI visibility is convenience, not an
    authorization boundary.
-8. **Fail closed on networking.** A Bridge-managed Pi deployment refuses
+9. **Fail closed on networking.** A Bridge-managed Pi deployment refuses
    non-loopback application bind addresses before Compose starts and at boot.
 
 ## Service topology
@@ -149,6 +153,16 @@ The container boundary substantially limits untrusted submissions, but it still
 shares the host kernel. A high-risk public Judge can be moved to a dedicated,
 replaceable host without changing the API contract.
 
+## Hidden-test transport
+
+Hidden test inputs remain server-side throughout the submission lifecycle. The
+Core API supplies trusted quest or OJ test definitions to the Judge API, which
+queues the job for a Judge worker. The worker passes hidden test payloads to the
+disposable runner through the runner supervisor's standard input rather than
+placing them in browser-visible assets or command-line arguments. Runner output
+is reduced to bounded verdict, timing, memory, and diagnostic data before being
+returned to the application.
+
 ### Redis
 
 Redis is internal to the Judge subsystem. It is not host-published in the normal
@@ -175,6 +189,8 @@ route public hostname traffic. AlgoQuest does not create or run a tunnel.
 
 This is the application-origin boundary. The contract is a single HTTP origin at
 `127.0.0.1:18081`. Bridge does not know the Web/API container topology.
+AlgoQuest owns the registration data that associates its public hostname with
+this origin.
 
 ### Gateway -> Core API
 
@@ -223,20 +239,24 @@ these production bind addresses.
 
 ## Availability and lifecycle
 
-AlgoQuest and Bridge have independent systemd units. AlgoQuest does not require,
-restart, or edit Bridge. Bridge likewise does not require `algoquest.service` to
-start; it can remain healthy while an origin is being redeployed.
+Bridge is a platform prerequisite for the production Pi deployment. It installs
+and starts independently, and it remains healthy with zero registered
+applications. AlgoQuest requires the Bridge edge to exist, but it does not edit
+Bridge source or own Bridge's tunnel lifecycle. Bridge never requires
+`algoquest.service` to start.
 
 Normal same-host deployment order is:
 
 ```text
-1. AlgoQuest origin
-2. intqwq.com origin
-3. Bridge edge and tunnel
+1. Bridge edge, registry, and tunnel
+2. AlgoQuest private origin, then AlgoQuest registration
+3. intqwq.com private origin, then intqwq.com registration
+4. Any future application origin, followed by its own registration
 ```
 
-Bridge is installed last because its bootstrap verifies both origins before
-publishing shared routing.
+Each application starts and verifies its loopback origin before calling the
+generic `bridge register` interface. Adding another subdomain therefore requires
+no Bridge source change.
 
 ## Scaling constraints
 
