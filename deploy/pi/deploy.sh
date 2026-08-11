@@ -62,6 +62,8 @@ if grep -q "CHANGE_ME_JUDGE_TOKEN" "${env_file}"; then
   echo "Generated the Judge API token."
 fi
 
+"${script_dir}/check-network-boundary.sh"
+
 if [[ "${mode}" == "all" || "${mode}" == "api" ]]; then
   missing_keys=()
   for key in RESEND_API_KEY TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY; do
@@ -119,7 +121,8 @@ fi
 
 if [[ "${mode}" == "all" || "${mode}" == "web" ]]; then
   web_port="$(get_env_value WEB_PORT)"
-  echo "AlgoQuest gateway is listening on port ${web_port:-8080}."
+  echo "AlgoQuest private origin is listening on http://127.0.0.1:${web_port:-18081}."
+  echo "Public routing is owned by Bridge."
 fi
 
 if [[ "${mode}" == "all" && "${ALGOQUEST_NO_CONSOLE:-0}" != "1" && -t 0 && -t 1 ]]; then
