@@ -85,6 +85,9 @@ jobs:
       - name: Validate Compose model
         run: docker compose --env-file .env.windows.example --profile all config --quiet
 
+      - name: Validate deployment shell syntax
+        run: bash -n install.sh uninstall.sh deploy/pi/*.sh
+
       - name: Validate rendered Nginx gateway configuration
         run: |
           docker run --rm \
