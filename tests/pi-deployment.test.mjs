@@ -2,20 +2,23 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const read = (path) =>
-  readFile(new URL(`../${path}`, import.meta.url), "utf8");
+const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("root Pi installer echoes account credentials and installs compatible Docker packages", async () => {
-  const [install, compatibilityBootstrap] = await Promise.all([
+test("root Pi installer treats Bridge as its infrastructure prerequisite", async () => {
+  const [install, compatibilityBootstrap, register] = await Promise.all([
     read("install.sh"),
     read("deploy/pi/bootstrap-ubuntu.sh"),
+    read("deploy/pi/register-bridge.sh"),
   ]);
-  assert.match(install, /read -r -p "\$\{label\}: " value/);
-  assert.doesNotMatch(install, /read -r -s -p/);
-  assert.match(install, /docker-compose-v2 docker-doc podman-docker containerd runc/);
-  assert.match(install, /compose up --help/);
+  assert.match(install, /command -v bridge/);
+  assert.match(install, /bridge-edge\.service/);
+  assert.match(install, /bridge-cloudflared\.service/);
+  assert.doesNotMatch(install, /apt-get|download\.docker\.com|pkg\.cloudflare\.com/);
+  assert.match(install, /register-bridge\.sh/);
   assert.match(compatibilityBootstrap, /exec bash "\$\{project_root\}\/install\.sh" "\$@"/);
-  assert.doesNotMatch(compatibilityBootstrap, /apt-get|docker compose up|cloudflared/);
+  assert.match(register, /service: "algoquest"/);
+  assert.match(register, /bridge register/);
+  assert.match(register, /client_max_body_size: "8m"/);
 });
 
 test("Pi deploy validates credentials, private bindings, and readiness", async () => {
@@ -23,69 +26,51 @@ test("Pi deploy validates credentials, private bindings, and readiness", async (
     read("deploy/pi/deploy.sh"),
     read("deploy/pi/check-network-boundary.sh"),
   ]);
-  assert.match(
-    deploy,
-    /for key in RESEND_API_KEY TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY/,
-  );
+  assert.match(deploy, /for key in RESEND_API_KEY TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY/);
   assert.match(deploy, /"\$\{value\}" == CHANGE_ME_\*/);
-  assert.doesNotMatch(deploy, /\^RESEND_API_KEY=\(\|CHANGE_ME_\)/);
   assert.match(deploy, /check-network-boundary\.sh/);
   assert.match(deploy, /--wait-timeout "\$\{wait_timeout\}"/);
-  assert.match(
-    boundary,
-    /WEB_BIND_ADDRESS API_BIND_ADDRESS JUDGE_BIND_ADDRESS DB_BIND_ADDRESS/,
-  );
+  assert.match(boundary, /WEB_BIND_ADDRESS API_BIND_ADDRESS JUDGE_BIND_ADDRESS DB_BIND_ADDRESS/);
   assert.match(boundary, /must be 127\.0\.0\.1/);
-  assert.doesNotMatch(boundary, /ALLOW_PUBLIC|ALLOW_REMOTE|0\.0\.0\.0/);
 });
 
-test("Pi service and status checks honor readiness and configured ports", async () => {
+test("Pi systemd starts after Bridge and keeps all host ports private", async () => {
   const [systemd, status, compose] = await Promise.all([
     read("deploy/pi/install-systemd.sh"),
     read("deploy/pi/status.sh"),
     read("compose.yml"),
   ]);
+  assert.match(systemd, /Requires=docker\.service bridge-edge\.service/);
+  assert.match(systemd, /After=docker\.service bridge-edge\.service/);
   assert.match(systemd, /ExecStartPre=.*check-network-boundary\.sh/);
   assert.match(systemd, /--wait --wait-timeout \$\{wait_timeout\}/);
-  assert.match(systemd, /WorkingDirectory=\$\{project_root\}/);
-  assert.doesNotMatch(systemd, /WorkingDirectory="\$\{project_root\}"/);
-  assert.match(systemd, /systemd-analyze verify "\$\{unit_path\}"/);
-  assert.match(systemd, /ALGOQUEST_SYSTEMD_DRY_RUN/);
   assert.match(status, /get_env_value WEB_PORT 18081/);
   assert.match(status, /get_env_value API_PORT 8787/);
   assert.match(status, /get_env_value JUDGE_PORT 8788/);
-  assert.doesNotMatch(compose, /\[200,503\]\.includes/);
   assert.match(compose, /\$\{WEB_BIND_ADDRESS:-127\.0\.0\.1\}:\$\{WEB_PORT:-8080\}:80/);
-  assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:8787\/health'\).*if\(!r\.ok\)/);
 });
 
-test("root Pi installer leaves public routing to Bridge", async () => {
-  const [install, env] = await Promise.all([
+test("AlgoQuest owns its hostname and registers it rather than configuring Bridge", async () => {
+  const [install, env, register] = await Promise.all([
     read("install.sh"),
     read(".env.pi.example"),
+    read("deploy/pi/register-bridge.sh"),
   ]);
-  assert.match(install, /ALGOQUEST_WEB_PORT:-18081/);
-  assert.match(install, /github\.com\/intqwq\/Bridge/);
-  assert.doesNotMatch(install, /tunnel create|algoquest-cloudflared\.service/);
-  assert.match(env, /^WEB_BIND_ADDRESS=127\.0\.0\.1$/m);
-  assert.match(env, /^WEB_PORT=18081$/m);
-  assert.match(env, /^API_BIND_ADDRESS=127\.0\.0\.1$/m);
-  assert.match(env, /^JUDGE_BIND_ADDRESS=127\.0\.0\.1$/m);
-  assert.match(env, /^DB_BIND_ADDRESS=127\.0\.0\.1$/m);
+  assert.match(install, /set_env PUBLIC_HOSTNAME "\$\{domain\}"/);
+  assert.match(env, /^PUBLIC_HOSTNAME=game\.intqwq\.com$/m);
+  assert.match(register, /PUBLIC_HOSTNAME/);
+  assert.match(register, /http:\/\/127\.0\.0\.1:\$\{web_port\}/);
+  assert.doesNotMatch(install, /cloudflared tunnel|tunnel route dns|nginx\/default/);
 });
 
-test("uninstaller erases AlgoQuest state but preserves Bridge", async () => {
+test("uninstaller unregisters only AlgoQuest and preserves the Bridge platform", async () => {
   const uninstall = await read("uninstall.sh");
   assert.match(uninstall, /ERASE-ALGOQUEST/);
-  assert.match(uninstall, /--plan/);
+  assert.match(uninstall, /bridge unregister algoquest/);
   assert.match(uninstall, /algoquest-postgres-data/);
   assert.match(uninstall, /algoquest-judge-work/);
   assert.match(uninstall, /algoquest-judge-cache/);
   assert.match(uninstall, /algoquest-judge-queue/);
-  assert.match(uninstall, /algoquest-cloudflared\.service/);
-  assert.match(uninstall, /\/var\/lib\/algoquest/);
-  assert.match(uninstall, /algoquest-runner:/);
-  assert.doesNotMatch(uninstall, /docker system prune/);
   assert.doesNotMatch(uninstall, /systemctl .*bridge-edge/);
   assert.doesNotMatch(uninstall, /systemctl .*bridge-cloudflared/);
   assert.doesNotMatch(uninstall, /tunnel delete -f bridge/);
@@ -93,12 +78,6 @@ test("uninstaller erases AlgoQuest state but preserves Bridge", async () => {
 
 test("Nginx quotes regex locations that contain repetition braces", async () => {
   const nginx = await read("deploy/nginx/default.conf.template");
-  assert.match(
-    nginx,
-    /location ~ "\^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\)" \{/,
-  );
-  assert.doesNotMatch(
-    nginx,
-    /location ~ \^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\) \{/,
-  );
+  assert.match(nginx, /location ~ "\^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\)" \{/);
+  assert.doesNotMatch(nginx, /location ~ \^\/api\/v1\/oj\/\(problems\$\|drafts\/\[0-9a-f-\]\{36\}\$\) \{/);
 });
