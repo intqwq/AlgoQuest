@@ -1,4 +1,31 @@
-# Deploy on Raspberry Pi
+# Deploy AlgoQuest on Raspberry Pi
+
+## Production shape
+
+The Raspberry Pi deployment is intentionally a **single-host Bridge-managed
+origin**. AlgoQuest owns its application stack, but Bridge owns every Internet
+entry point.
+
+```text
+Internet
+  -> Cloudflare Tunnel owned by Bridge
+  -> Bridge edge 127.0.0.1:18080
+  -> AlgoQuest private origin 127.0.0.1:18081
+       -> AlgoQuest origin gateway
+            -> Web
+            -> Core API
+                 -> PostgreSQL
+                 -> Judge API -> Redis -> Judge worker -> runner containers
+```
+
+The AlgoQuest Nginx gateway is application-local. It combines the Web UI and
+`/api` into one same-origin application endpoint. It is not a public reverse
+proxy and it does not manage Cloudflare, DNS, tunnels, TLS, or other projects.
+
+For this Pi deployment, every host-published AlgoQuest service must bind to
+`127.0.0.1`. `deploy/pi/check-network-boundary.sh` enforces that rule during
+manual deploys and as an `ExecStartPre` check at boot. If a bind is changed to a
+non-loopback address, deployment fails instead of bypassing Bridge.
 
 ## Recommended host
 
@@ -7,13 +34,10 @@
 - NVMe storage for Docker data when available
 - Resend and Turnstile production credentials
 
-Keep the system, Docker, and Compose packages from one packaging source. Mixing
-the distro `docker-compose-v2` package with Docker's
-`docker-compose-plugin` package can cause file conflicts.
+Keep Docker Engine and Compose packages from one packaging source. The installer
+uses Docker's official APT repository when Docker is not already available.
 
-## One-click Ubuntu deployment
-
-Clone the repository, then run the root installer as root:
+## One-click deployment
 
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
@@ -21,20 +45,18 @@ cd AlgoQuest
 sudo bash install.sh
 ```
 
-The script performs the complete production setup:
+The installer:
 
-1. Installs Docker Engine, Buildx, and Docker Compose v2 from the official APT
-   repository.
-2. Creates `.env.pi`, generates the PostgreSQL and Judge secrets, and prompts
-   for Resend, Turnstile, and site-owner credentials.
-3. Binds the Dockerized Nginx origin gateway to `127.0.0.1:18081`, keeping the API,
-   Judge, database, and origin gateway off the public LAN.
-4. Builds all ARM64 images and runs the isolated Judge and Core API smoke tests.
-5. Installs `algoquest.service` for the application stack.
-6. Leaves public routing to the independent
-   [Bridge](https://github.com/intqwq/Bridge) deployment.
+1. installs Docker Engine, Buildx, and Docker Compose v2 when needed;
+2. creates `.env.pi` and generates the PostgreSQL and Judge secrets;
+3. prompts for Resend, Turnstile, and site-owner values;
+4. enforces the loopback-only network boundary;
+5. builds the ARM64 images and C++14 runner;
+6. runs Judge and Core API smoke tests;
+7. exposes only the private application origin at `127.0.0.1:18081`; and
+8. installs `algoquest.service` for boot.
 
-To use another hostname or private origin port:
+To use a different public hostname or private origin port:
 
 ```bash
 sudo env \
@@ -43,8 +65,8 @@ sudo env \
   bash install.sh
 ```
 
-For a non-interactive environment setup, pass the required account values as
-environment variables.
+For unattended setup, the required account values may be supplied as environment
+variables:
 
 ```bash
 sudo env \
@@ -55,166 +77,133 @@ sudo env \
   bash install.sh
 ```
 
-Do not put these secrets into shell history on a shared machine. An existing
-`.env.pi` is reused, so entering the credentials interactively is the safer
-default.
+Entering secrets interactively is preferable on shared systems because shell
+history may be retained.
 
-## Uninstall
+## Bridge contract
 
-Preview a complete host cleanup first:
+The production `.env.pi` contract is:
 
-```bash
-sudo bash uninstall.sh --plan
+```dotenv
+WEB_BIND_ADDRESS=127.0.0.1
+WEB_PORT=18081
+API_BIND_ADDRESS=127.0.0.1
+JUDGE_BIND_ADDRESS=127.0.0.1
+DB_BIND_ADDRESS=127.0.0.1
+API_ALLOWED_ORIGIN=https://game.intqwq.com
+PUBLIC_APP_URL=https://game.intqwq.com
+TURNSTILE_EXPECTED_HOSTNAME=game.intqwq.com
 ```
 
-Then remove the AlgoQuest runtime, systemd units, Compose resources, PostgreSQL
-and Judge volumes, local deployment configuration, runtime data and legacy
-AlgoQuest Cloudflare files:
+Bridge reaches only the origin gateway on `127.0.0.1:18081`. The Core API,
+Judge, and PostgreSQL host ports stay loopback-only for local operations and
+health checks. Redis is not host-published. The Docker socket is available only
+to the dedicated Judge worker.
 
-```bash
-sudo bash uninstall.sh
-```
+Do not add Cloudflare Tunnel services, public DNS automation, public hostname
+routing, or public bind addresses to this repository. Those belong in
+[Bridge](https://github.com/intqwq/Bridge).
 
-The interactive confirmation phrase is `ERASE-ALGOQUEST`. The installer and
-uninstaller deliberately do **not** stop or remove Bridge. `bridge-edge.service`,
-`bridge-cloudflared.service`, `~/.cloudflared/bridge.yml`, and the remote tunnel
-named `bridge` remain untouched. Use `--remove-legacy-tunnel` only when the old
-remote tunnel named exactly `algoquest` should also be deleted. Use
-`--purge-source` only when this Git checkout should be removed after uninstall.
-
-## Manual first deployment
-
-Use this path when Docker is already managed:
+## Manual deployment on a prepared Docker host
 
 ```bash
 git clone https://github.com/intqwq/AlgoQuest.git
 cd AlgoQuest
 chmod +x install.sh uninstall.sh deploy/pi/*.sh
 cp .env.pi.example .env.pi
+chmod 600 .env.pi
 ```
 
-Before the first deployment, configure the Resend API key and Cloudflare
-Turnstile site/secret keys in `.env.pi`. The production script intentionally
-refuses placeholder account credentials. Follow
-[Player account security](ACCOUNT_SECURITY.md), then run:
+Configure the production Resend and Turnstile values, then run:
 
 ```bash
-chmod 600 .env.pi
-./deploy/pi/deploy.sh
+./deploy/pi/deploy.sh all
 ```
 
-The script fills the database and Judge secrets, builds the ARM64 C++ runner,
-and starts every service. Before reporting success, it verifies both the
-isolated runner and the complete Core API submission/poll/progress path.
+The deployment generates any remaining internal secrets, checks the network
+boundary, builds the C++ runner, starts the stack, and verifies both the Judge
+and the complete Core API submission/poll/progress path.
+
+For local maintenance, component profiles remain available:
+
+```bash
+./deploy/pi/deploy.sh web
+./deploy/pi/deploy.sh api
+./deploy/pi/deploy.sh judge
+./deploy/pi/deploy.sh database
+```
+
+These Pi profiles still obey the loopback-only contract. Cross-machine service
+exposure is deliberately outside this production deployment shape; use a
+separate explicitly secured deployment design rather than weakening `.env.pi`.
+
+## Health and operations
 
 ```bash
 ./deploy/pi/status.sh
-docker compose --env-file .env.pi logs --tail 100 api judge
-```
-
-## Services and health checks
-
-```bash
 sudo systemctl status algoquest
 docker compose --env-file .env.pi ps
 docker compose --env-file .env.pi logs -f
 curl -fsS http://127.0.0.1:18081/healthz
 ```
 
-After the Bridge deployment is also complete, the public endpoint is:
+After Bridge is installed, the public endpoint is:
 
 ```text
 https://game.intqwq.com
 ```
 
-## Start at boot
-
-For a manual deployment, install the application systemd unit after the first
-successful deployment:
+For a manual first deployment, install the boot unit after the stack is healthy:
 
 ```bash
 sudo ./deploy/pi/install-systemd.sh
 ```
 
-The generated unit uses the repository's current absolute path, so the project
-does not have to live under a fixed directory. The one-click installer installs
-only the application unit.
+The unit records the current repository path and rechecks the private network
+boundary before every start.
 
-## Publish through Bridge
+## Install order with the other services
 
-Bridge owns one Cloudflare Tunnel and one hostname-routing Nginx service for
-both websites. It reaches AlgoQuest through this private contract:
-
-```dotenv
-WEB_BIND_ADDRESS=127.0.0.1
-WEB_PORT=18081
-API_ALLOWED_ORIGIN=https://game.intqwq.com
-PUBLIC_APP_URL=https://game.intqwq.com
-TURNSTILE_EXPECTED_HOSTNAME=game.intqwq.com
-```
-
-Do not expose `18081`, `5432`, `8787`, `8788`, or the Docker socket publicly.
-After both origins are installed, follow the Bridge repository's Raspberry Pi
-bootstrap. An AlgoQuest restart then affects only this origin; it no longer
-recreates a shared edge or restarts intqwq.com.
-
-AlgoQuest still contains its own Dockerized Nginx **origin gateway**. That
-application-local gateway combines Web and Core API behind one same-origin
-endpoint. It is separate from Bridge's shared public Nginx edge and must remain
-part of the AlgoQuest Compose stack.
-
-## Split the Pi and Windows roles
-
-A useful test layout is:
+On a machine hosting all three repositories, install in this order:
 
 ```text
-Windows: Web + Core API + PostgreSQL
-Pi:      Judge only
+1. AlgoQuest   -> 127.0.0.1:18081
+2. intqwq.com  -> 127.0.0.1:18082
+3. Bridge      -> 127.0.0.1:18080 + Cloudflare Tunnel
 ```
 
-On the Pi:
-
-```bash
-./deploy/pi/deploy.sh judge
-```
-
-Set `JUDGE_BIND_ADDRESS=0.0.0.0` in `.env.pi`, use a strong
-`JUDGE_API_TOKEN`, and allow port `8788` only from the Windows machine or VPN
-address.
-
-On Windows, set:
-
-```text
-JUDGE_API_URL=http://PI_PRIVATE_IP:8788
-JUDGE_API_TOKEN=the_same_value_as_the_pi
-```
-
-Then redeploy the API profile.
-
-The inverse layout is also supported: set `API_UPSTREAM`, `DATABASE_URL`, and
-`JUDGE_API_URL` to the appropriate private addresses.
-
-## Pi tuning
-
-The defaults are conservative:
-
-```text
-JUDGE_MAX_PARALLEL=2
-JUDGE_QUEUE_CAPACITY=1000
-```
-
-Use NVMe-backed Docker storage, retain at least one CPU core for Web/API/DB, and
-measure real submissions before increasing concurrency. A queue capacity of
-1,000 absorbs a burst; it does not mean 1,000 programs execute simultaneously.
+Bridge is last because its normal bootstrap verifies both application origins
+before publishing the shared Cloudflare routing.
 
 ## Backup
 
-Create a logical PostgreSQL backup:
+PostgreSQL is the durable application state. Create a logical backup with:
 
 ```bash
 docker compose --env-file .env.pi exec -T db \
   pg_dump -U algoquest algoquest > algoquest.sql
 ```
 
-Restore into a fresh database only after stopping write traffic. Judge work and
-compile-cache volumes are disposable; PostgreSQL is the durable state.
+Judge work and compile-cache volumes are disposable. Restore a database backup
+only after stopping write traffic.
+
+## Uninstall
+
+Preview the destructive AlgoQuest cleanup first:
+
+```bash
+sudo bash uninstall.sh --plan
+```
+
+Then remove the AlgoQuest runtime, systemd units, Compose resources, PostgreSQL
+and Judge volumes, deployment configuration, and legacy AlgoQuest leftovers:
+
+```bash
+sudo bash uninstall.sh
+```
+
+The confirmation phrase is `ERASE-ALGOQUEST`. The uninstaller deliberately does
+not stop or remove `bridge-edge.service`, `bridge-cloudflared.service`,
+`~/.cloudflared/bridge.yml`, or the remote tunnel named `bridge`. The optional
+`--remove-legacy-tunnel` flag applies only to the obsolete tunnel named exactly
+`algoquest`.
