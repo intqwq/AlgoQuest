@@ -13,6 +13,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "redis": "6.2.0"
+    "redis": "6.2.1"
   }
 }
