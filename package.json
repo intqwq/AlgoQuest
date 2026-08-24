@@ -43,7 +43,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.8.0",
     "react-server-dom-webpack": "19.2.6",
-    "tailwindcss": "4.2.1",
+    "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "typescript-eslint": "8.65.0",
     "vinext": "0.0.50",
